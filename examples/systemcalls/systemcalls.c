@@ -58,8 +58,8 @@ bool do_exec(int count, ...)
     if (pid == 0)
     {
         // Child process: replace image with execvp
-        execvp(command[0], command);
-        perror("execvp"); // only reached on error
+        execv(command[0], command);
+        perror("execv"); // only reached on error
         exit(EXIT_FAILURE);
     }
 
@@ -121,8 +121,8 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
         close(fd);
 
         // Execute command
-        execvp(command[0], command);
-        perror("execvp"); // only reached if exec fails
+        execv(command[0], command);
+        perror("execv"); // only reached if exec fails
         exit(EXIT_FAILURE);
     }
 
