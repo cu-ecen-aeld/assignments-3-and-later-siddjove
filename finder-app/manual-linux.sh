@@ -140,20 +140,37 @@ cp -a ${SYSROOT}/lib64/* lib/ 2>/dev/null || true
 # ---------- Step 7: Copy finder-app files ----------
 cd "${OUTDIR}"
 echo "📄 Copying finder apps and scripts..."
+
+# Detect repo root dynamically
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+if [ -z "$REPO_ROOT" ]; then
+    # Fallback for GitHub autograder environment
+    REPO_ROOT="/__w/assignments-3-and-later-siddjove/assignments-3-and-later-siddjove"
+fi
+
+APP_DIR="${REPO_ROOT}/finder-app"
+
+# Create destination directories
+mkdir -p ${STAGING}/home/conf
 mkdir -p ${STAGING}/home/finder-app
 
-echo "📄 Copying finder apps and scripts..."
+# Copy core scripts and binaries
+if [ -f "${APP_DIR}/finder.sh" ]; then
+    cp ${APP_DIR}/finder.sh ${STAGING}/home/finder-app/
+else
+    echo "❌ finder.sh not found in ${APP_DIR}"
+    exit 1
+fi
 
-APP_DIR=$(dirname "$(realpath "$0")")
+cp ${APP_DIR}/finder-test.sh ${STAGING}/home/finder-app/ || { echo "❌ Missing finder-test.sh"; exit 1; }
+cp ${APP_DIR}/conf/* ${STAGING}/home/finder-app/conf/ || { echo "❌ Missing conf files"; exit 1; }
+cp ${APP_DIR}/writer ${STAGING}/home/finder-app/ || { echo "❌ Missing writer binary"; exit 1; }
 
-mkdir -p ${STAGING}/home/conf
+cp ${APP_DIR}/autorun-qemu.sh ${STAGING}/home/finder-app/ || echo "⚠️ autorun-qemu.sh not found, skipping"
 
-cp ${APP_DIR}/finder.sh ${STAGING}/home/ || { echo "❌ Missing finder.sh"; exit 1; }
-cp ${APP_DIR}/finder-test.sh ${STAGING}/home/ || { echo "❌ Missing finder-test.sh"; exit 1; }
-cp ${APP_DIR}/conf/* ${STAGING}/home/conf/ || { echo "❌ Missing conf files"; exit 1; }
-cp ${APP_DIR}/writer ${STAGING}/home/ || { echo "❌ Missing writer binary"; exit 1; }
+echo "✅ Finder apps and scripts copied successfully."
 
-cp ${APP_DIR}/autorun-qemu.sh ${STAGING}/home/ || echo "⚠️ autorun-qemu.sh not found, skipping"
+
 
 
 # Cross-compile writer
