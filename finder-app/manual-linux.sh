@@ -163,6 +163,7 @@ else
 fi
 
 cp ${APP_DIR}/finder-test.sh ${STAGING}/home/finder-app/ || { echo "❌ Missing finder-test.sh"; exit 1; }
+mkdir -p ${STAGING}/home/finder-app/conf
 cp ${APP_DIR}/conf/* ${STAGING}/home/finder-app/conf/ || { echo "❌ Missing conf files"; exit 1; }
 cp ${APP_DIR}/writer ${STAGING}/home/finder-app/ || { echo "❌ Missing writer binary"; exit 1; }
 
