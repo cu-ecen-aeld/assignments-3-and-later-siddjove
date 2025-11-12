@@ -1,37 +1,101 @@
 #!/bin/bash
+# -----------------------------------------------------------------------------
+# Assignment 3 Part 2 - Manual Linux + RootFS Build
+# Author: Siddhove
+# -----------------------------------------------------------------------------
+# Builds kernel, busybox, writer, and root filesystem for QEMU ARM64.
+# -----------------------------------------------------------------------------
+
 set -e
 set -u
 
+# ---------------------- Setup Output Directory -------------------------------
 OUTDIR=${1:-/tmp/aeld}
 KERNEL_REPO=https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git
 KERNEL_VERSION=v5.15.163
+BUSYBOX_REPO=https://git.busybox.net/busybox
 BUSYBOX_VERSION=1_33_1
+FINDER_APP_DIR=$(realpath "$(dirname "$0")")
+
+ARCH=arm64
 CROSS_COMPILE=aarch64-linux-gnu-
 
 echo "Using output directory: ${OUTDIR}"
-
-# Create the output directory if it doesn’t exist
 mkdir -p ${OUTDIR}
 
-# Step 1: Clone Linux kernel if not already present
+# ---------------------- Build Kernel ----------------------------------------
 cd ${OUTDIR}
 if [ ! -d "${OUTDIR}/linux-stable" ]; then
-    echo "Cloning Linux kernel source..."
-    git clone --depth 1 --branch ${KERNEL_VERSION} ${KERNEL_REPO} linux-stable
+    echo "Cloning Linux kernel..."
+    git clone ${KERNEL_REPO} linux-stable --depth 1 --branch ${KERNEL_VERSION}
 fi
 
-# Step 2: Build the kernel
-cd ${OUTDIR}/linux-stable
-echo "Checking out version ${KERNEL_VERSION}"
+cd linux-stable
+echo "Checking out kernel version ${KERNEL_VERSION}"
 git checkout ${KERNEL_VERSION}
 
-echo "Starting kernel build..."
-make ARCH=arm64 CROSS_COMPILE=${CROSS_COMPILE} defconfig
-make -j$(nproc) ARCH=arm64 CROSS_COMPILE=${CROSS_COMPILE} all
-make -j$(nproc) ARCH=arm64 CROSS_COMPILE=${CROSS_COMPILE} modules
-make -j$(nproc) ARCH=arm64 CROSS_COMPILE=${CROSS_COMPILE} dtbs
+echo "Building kernel..."
+make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} defconfig
+make -j$(nproc) ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} all
+cp arch/${ARCH}/boot/Image ${OUTDIR}/
 
-# Copy the kernel image
-cp ${OUTDIR}/linux-stable/arch/arm64/boot/Image ${OUTDIR}/
-echo "Kernel build complete! Kernel image copied to ${OUTDIR}"
+# ---------------------- Build BusyBox ---------------------------------------
+cd ${OUTDIR}
+if [ ! -d "${OUTDIR}/busybox" ]; then
+    echo "Cloning BusyBox..."
+    git clone ${BUSYBOX_REPO}
+fi
+
+cd busybox
+git checkout ${BUSYBOX_VERSION}
+echo "Building BusyBox..."
+make distclean
+make defconfig
+make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} -j$(nproc)
+make CONFIG_PREFIX=${OUTDIR}/rootfs ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} install
+
+# ---------------------- Create Root Filesystem ------------------------------
+echo "Creating root filesystem..."
+cd ${OUTDIR}
+mkdir -p ${OUTDIR}/rootfs
+cd ${OUTDIR}/rootfs
+mkdir -p bin dev etc home lib lib64 proc sbin sys tmp usr var
+mkdir -p usr/bin usr/sbin
+
+# Copy busybox output (should already be installed)
+echo "Library dependencies..."
+cd ${OUTDIR}/rootfs
+${CROSS_COMPILE}readelf -a bin/busybox | grep "program interpreter" || true
+${CROSS_COMPILE}readelf -a bin/busybox | grep "Shared library" || true
+
+# ---------------------- Copy App Files --------------------------------------
+echo "Copying finder apps and scripts..."
+cd ${OUTDIR}/rootfs/home
+sudo mkdir -p finder-app
+
+sudo cp -r ${FINDER_APP_DIR}/finder.sh finder-app/
+sudo cp -r ${FINDER_APP_DIR}/finder-test.sh finder-app/
+sudo cp -r ${FINDER_APP_DIR}/conf finder-app/
+sudo cp -r ${FINDER_APP_DIR}/writer finder-app/
+sudo cp -r ${FINDER_APP_DIR}/autorun-qemu.sh finder-app/
+
+sudo chmod -R 755 finder-app
+sudo chown -R root:root finder-app
+
+# ---------------------- Device Nodes ----------------------------------------
+echo "Creating device nodes..."
+cd ${OUTDIR}/rootfs
+sudo mknod -m 666 dev/null c 1 3 || true
+sudo mknod -m 622 dev/console c 5 1 || true
+sudo chown -R root:root *
+
+# ---------------------- Create Initramfs ------------------------------------
+echo "Creating initramfs..."
+cd ${OUTDIR}/rootfs
+find . | cpio -H newc -ov --owner root:root > ${OUTDIR}/initramfs.cpio
+gzip -f ${OUTDIR}/initramfs.cpio
+
+echo "Build complete!"
+echo "Kernel Image: ${OUTDIR}/Image"
+echo "Initramfs:    ${OUTDIR}/initramfs.cpio.gz"
 
