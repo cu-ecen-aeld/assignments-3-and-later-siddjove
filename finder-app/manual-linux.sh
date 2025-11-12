@@ -115,12 +115,14 @@ mkdir -p usr/bin usr/sbin var/log
 # ---------- Step 5: Build BusyBox ----------
 cd "${OUTDIR}"
 if [ ! -d "${OUTDIR}/busybox" ]; then
-    echo "🌐 Cloning BusyBox..."
-    git clone https://busybox.net/git/busybox.git
+    echo "🌐 Cloning BusyBox from GitHub mirror..."
+    git clone https://github.com/mirror/busybox.git busybox
+else
+    echo "📁 Using existing BusyBox source in ${OUTDIR}/busybox"
 fi
 
 cd busybox
-git checkout 1_33_1
+git checkout 1_33_1 || git checkout master
 make distclean
 make defconfig
 echo "🔧 Building BusyBox..."
