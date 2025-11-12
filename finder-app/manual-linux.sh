@@ -1,112 +1,152 @@
 #!/bin/bash
 # -----------------------------------------------------------------------------
-# Assignment 3 Part 2 - Manual Linux + RootFS Build
+# Assignment 3 Part 2 - Manual Kernel + RootFS Build Script
 # Author: Siddhove
 # -----------------------------------------------------------------------------
-# Builds kernel, busybox, writer, and root filesystem for QEMU ARM64.
+# This script builds the Linux kernel and root filesystem manually.
+# It will:
+#  - Detect correct cross-compiler prefix
+#  - Build Linux kernel (minimal config)
+#  - Build BusyBox
+#  - Assemble rootfs with writer, finder scripts, and configs
+#  - Produce Image + initramfs.cpio.gz in outdir
 # -----------------------------------------------------------------------------
 
 set -e
-set -u
+START_TIME=$(date +%s)
 
-# ---------------------- Setup Output Directory -------------------------------
+# ---------- Step 1: Parse arguments ----------
 OUTDIR=${1:-/tmp/aeld}
-KERNEL_REPO=https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git
-KERNEL_VERSION=v5.15.163
-BUSYBOX_REPO=https://git.busybox.net/busybox
-BUSYBOX_VERSION=1_33_1
-FINDER_APP_DIR=$(realpath "$(dirname "$0")")
+echo "=========================================="
+echo " Using output directory: ${OUTDIR}"
+echo "=========================================="
 
-ARCH=arm64
-# Detect available cross-compiler prefix
+mkdir -p "${OUTDIR}"
+if [ ! -d "${OUTDIR}" ]; then
+    echo "❌ ERROR: Unable to create ${OUTDIR}"
+    exit 1
+fi
+
+# ---------- Step 2: Detect cross compiler ----------
 if command -v aarch64-none-linux-gnu-gcc &> /dev/null; then
     CROSS_COMPILE=aarch64-none-linux-gnu-
 elif command -v aarch64-linux-gnu-gcc &> /dev/null; then
     CROSS_COMPILE=aarch64-linux-gnu-
 else
-    echo "Error: No aarch64 cross-compiler found!"
+    echo "❌ ERROR: No valid aarch64 cross-compiler found!"
     exit 1
 fi
-
 ARCH=arm64
+echo "✅ Using cross compiler prefix: ${CROSS_COMPILE}"
+${CROSS_COMPILE}gcc --version | head -n 1
 
-
-echo "Using output directory: ${OUTDIR}"
-mkdir -p ${OUTDIR}
-
-# ---------------------- Build Kernel ----------------------------------------
-cd ${OUTDIR}
+# ---------- Step 3: Build Linux kernel ----------
+cd "${OUTDIR}"
 if [ ! -d "${OUTDIR}/linux-stable" ]; then
-    echo "Cloning Linux kernel..."
-    git clone ${KERNEL_REPO} linux-stable --depth 1 --branch ${KERNEL_VERSION}
+    echo "🌐 Cloning Linux kernel..."
+    git clone --depth 1 --branch v5.15.163 https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git linux-stable
 fi
 
 cd linux-stable
-echo "Checking out kernel version ${KERNEL_VERSION}"
-git checkout ${KERNEL_VERSION}
+echo "📦 Checking out kernel version v5.15.163"
+git checkout v5.15.163
 
-echo "Building kernel..."
+echo "⚙️ Building kernel (minimal configuration)..."
 make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} defconfig
-make -j$(nproc) ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} all
-cp arch/${ARCH}/boot/Image ${OUTDIR}/
 
-# ---------------------- Build BusyBox ---------------------------------------
-cd ${OUTDIR}
+# Disable unnecessary modules/drivers
+sed -i 's/^CONFIG_MODULES=y/# CONFIG_MODULES is not set/' .config || true
+scripts/config --disable CONFIG_MODULES || true
+scripts/config --disable CONFIG_SOUND || true
+scripts/config --disable CONFIG_DRM || true
+scripts/config --disable CONFIG_GPU || true
+
+BUILD_START=$(date +%s)
+make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} -j2 all
+BUILD_END=$(date +%s)
+cp arch/arm64/boot/Image ${OUTDIR}/
+
+echo "✅ Kernel build complete in $((BUILD_END - BUILD_START)) seconds."
+
+# ---------- Step 4: Create rootfs structure ----------
+cd "${OUTDIR}"
+echo "📁 Creating root filesystem structure..."
+STAGING="${OUTDIR}/rootfs"
+rm -rf "${STAGING}"
+mkdir -p "${STAGING}"
+
+cd "${STAGING}"
+mkdir -p bin dev etc home lib proc sbin sys tmp usr var
+mkdir -p usr/bin usr/sbin var/log
+
+# ---------- Step 5: Build BusyBox ----------
+cd "${OUTDIR}"
 if [ ! -d "${OUTDIR}/busybox" ]; then
-    echo "Cloning BusyBox..."
-    git clone ${BUSYBOX_REPO}
+    echo "🌐 Cloning BusyBox..."
+    git clone https://busybox.net/git/busybox.git
 fi
 
 cd busybox
-git checkout ${BUSYBOX_VERSION}
-echo "Building BusyBox..."
+git checkout 1_33_1
 make distclean
 make defconfig
-make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} -j$(nproc)
-make CONFIG_PREFIX=${OUTDIR}/rootfs ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} install
+echo "🔧 Building BusyBox..."
+make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} -j2
+make CONFIG_PREFIX=${STAGING} install
+echo "✅ BusyBox installed into rootfs."
 
-# ---------------------- Create Root Filesystem ------------------------------
-echo "Creating root filesystem..."
-cd ${OUTDIR}
-mkdir -p ${OUTDIR}/rootfs
-cd ${OUTDIR}/rootfs
-mkdir -p bin dev etc home lib lib64 proc sbin sys tmp usr var
-mkdir -p usr/bin usr/sbin
+# ---------- Step 6: Library dependencies ----------
+cd "${STAGING}"
+echo "📚 Copying library dependencies..."
+SYSROOT=$(${CROSS_COMPILE}gcc -print-sysroot)
+cp -a ${SYSROOT}/lib/* lib/ 2>/dev/null || true
+cp -a ${SYSROOT}/lib64/* lib/ 2>/dev/null || true
 
-# Copy busybox output (should already be installed)
-echo "Library dependencies..."
-cd ${OUTDIR}/rootfs
-${CROSS_COMPILE}readelf -a bin/busybox | grep "program interpreter" || true
-${CROSS_COMPILE}readelf -a bin/busybox | grep "Shared library" || true
+# ---------- Step 7: Copy finder-app files ----------
+cd "${OUTDIR}"
+echo "📄 Copying finder apps and scripts..."
+mkdir -p ${STAGING}/home/finder-app
 
-# ---------------------- Copy App Files --------------------------------------
-echo "Copying finder apps and scripts..."
-cd ${OUTDIR}/rootfs/home
-sudo mkdir -p finder-app
+cp -r ~/assignment-3-siddjove/finder-app/finder.sh ${STAGING}/home/finder-app/
+cp -r ~/assignment-3-siddjove/finder-app/finder-test.sh ${STAGING}/home/finder-app/
+cp -r ~/assignment-3-siddjove/finder-app/conf ${STAGING}/home/finder-app/
+cp -r ~/assignment-3-siddjove/finder-app/autorun-qemu.sh ${STAGING}/home/finder-app/ || true
 
-sudo cp -r ${FINDER_APP_DIR}/finder.sh finder-app/
-sudo cp -r ${FINDER_APP_DIR}/finder-test.sh finder-app/
-sudo cp -r ${FINDER_APP_DIR}/conf finder-app/
-sudo cp -r ${FINDER_APP_DIR}/writer finder-app/
-sudo cp -r ${FINDER_APP_DIR}/autorun-qemu.sh finder-app/
+# Cross-compile writer
+echo "🧱 Building writer app..."
+${CROSS_COMPILE}gcc -static -O2 -Wall -o ${STAGING}/home/finder-app/writer ~/assignment-3-siddjove/finder-app/writer.c
+echo "✅ Writer built successfully."
 
-sudo chmod -R 755 finder-app
-sudo chown -R root:root finder-app
+# ---------- Step 8: Create init script ----------
+cd "${STAGING}"
+cat << 'EOF' > init
+#!/bin/sh
+echo "Init process starting..."
+mount -t proc none /proc
+mount -t sysfs none /sys
+mount -t devtmpfs none /dev
+echo "Running finder-test.sh..."
+cd /home/finder-app
+./finder-test.sh
+poweroff -f
+EOF
 
-# ---------------------- Device Nodes ----------------------------------------
-echo "Creating device nodes..."
-cd ${OUTDIR}/rootfs
-sudo mknod -m 666 dev/null c 1 3 || true
-sudo mknod -m 622 dev/console c 5 1 || true
-sudo chown -R root:root *
+chmod +x init
+echo "✅ Init script ready."
 
-# ---------------------- Create Initramfs ------------------------------------
-echo "Creating initramfs..."
-cd ${OUTDIR}/rootfs
+# ---------- Step 9: Create initramfs ----------
+cd "${STAGING}"
+echo "📦 Creating initramfs..."
 find . | cpio -H newc -ov --owner root:root > ${OUTDIR}/initramfs.cpio
 gzip -f ${OUTDIR}/initramfs.cpio
 
-echo "Build complete!"
+END_TIME=$(date +%s)
+TOTAL_TIME=$((END_TIME - START_TIME))
+
+echo "-------------------------------------------"
+echo "✅ Build complete!"
 echo "Kernel Image: ${OUTDIR}/Image"
 echo "Initramfs:    ${OUTDIR}/initramfs.cpio.gz"
+echo "Total build time: ${TOTAL_TIME} seconds"
+echo "-------------------------------------------"
 
