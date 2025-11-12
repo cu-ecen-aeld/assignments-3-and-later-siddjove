@@ -142,10 +142,19 @@ cd "${OUTDIR}"
 echo "📄 Copying finder apps and scripts..."
 mkdir -p ${STAGING}/home/finder-app
 
-cp -r ~/assignment-3-siddjove/finder-app/finder.sh ${STAGING}/home/finder-app/
-cp -r ~/assignment-3-siddjove/finder-app/finder-test.sh ${STAGING}/home/finder-app/
-cp -r ~/assignment-3-siddjove/finder-app/conf ${STAGING}/home/finder-app/
-cp -r ~/assignment-3-siddjove/finder-app/autorun-qemu.sh ${STAGING}/home/finder-app/ || true
+echo "📄 Copying finder apps and scripts..."
+
+APP_DIR=$(dirname "$(realpath "$0")")
+
+mkdir -p ${STAGING}/home/conf
+
+cp ${APP_DIR}/finder.sh ${STAGING}/home/ || { echo "❌ Missing finder.sh"; exit 1; }
+cp ${APP_DIR}/finder-test.sh ${STAGING}/home/ || { echo "❌ Missing finder-test.sh"; exit 1; }
+cp ${APP_DIR}/conf/* ${STAGING}/home/conf/ || { echo "❌ Missing conf files"; exit 1; }
+cp ${APP_DIR}/writer ${STAGING}/home/ || { echo "❌ Missing writer binary"; exit 1; }
+
+cp ${APP_DIR}/autorun-qemu.sh ${STAGING}/home/ || echo "⚠️ autorun-qemu.sh not found, skipping"
+
 
 # Cross-compile writer
 echo "🧱 Building writer app..."
