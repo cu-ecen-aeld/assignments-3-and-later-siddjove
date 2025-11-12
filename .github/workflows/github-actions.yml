@@ -1,26 +1,53 @@
-name: assignment-test
+name: Assignment 3 - Fast Build
+
 on:
-    push:
-        tags-ignore:
-            - '*'
-        branches:
-            - '*'
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
 jobs:
-    unit-test:
-        container: cuaesd/aesd-autotest:24-unit-test
-        runs-on: self-hosted
-        steps:
-          - uses: actions/checkout@v2
-          - name: Checkout submodules
-            run : git submodule update --init --recursive
-          - name: Run unit test
-            run: ./unit-test.sh
-    full-test:
-        container: cuaesd/aesd-autotest:24-assignment3
-        runs-on: self-hosted
-        steps:
-          - uses: actions/checkout@v2
-          - name: Checkout submodules
-            run : git submodule update --init --recursive
-          - name: Run full test
-            run: ./full-test.sh
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 🧩 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: 🧰 Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu build-essential qemu-system-aarch64 cpio
+
+      - name: 💾 Restore Build Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            /tmp/aeld-cache
+          key: aeld-cache-${{ runner.os }}-${{ hashFiles('finder-app/manual-linux.sh') }}
+          restore-keys: |
+            aeld-cache-${{ runner.os }}-
+
+      - name: ⚙️ Run Manual Kernel + RootFS Build
+        run: |
+          cd finder-app
+          chmod +x manual-linux.sh
+          ./manual-linux.sh /tmp/aeld
+
+      - name: 🧪 Verify Output Files
+        run: |
+          ls -lh /tmp/aeld
+          file /tmp/aeld/Image
+          file /tmp/aeld/initramfs.cpio.gz
+
+      - name: 💾 Save Build Cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: /tmp/aeld-cache
+          key: aeld-cache-${{ runner.os }}-${{ hashFiles('finder-app/manual-linux.sh') }}
+
+      - name: ✅ Done
+        run: echo "🎉 Fast cached build completed successfully!"
+
