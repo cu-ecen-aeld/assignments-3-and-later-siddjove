@@ -51,19 +51,52 @@ cd linux-stable
 echo "📦 Checking out kernel version v5.15.163"
 git checkout v5.15.163
 
-echo "⚙️ Building kernel (minimal configuration)..."
+echo "⚙️ Creating minimal defconfig..."
 make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} defconfig
 
-# Disable unnecessary modules/drivers
-sed -i 's/^CONFIG_MODULES=y/# CONFIG_MODULES is not set/' .config || true
+echo "🧰 Pruning unneeded drivers for smaller kernel..."
+# Disable modules and most drivers we don't need
 scripts/config --disable CONFIG_MODULES || true
 scripts/config --disable CONFIG_SOUND || true
 scripts/config --disable CONFIG_DRM || true
 scripts/config --disable CONFIG_GPU || true
+scripts/config --disable CONFIG_NET || true
+scripts/config --disable CONFIG_USB || true
+scripts/config --disable CONFIG_SCSI || true
+scripts/config --disable CONFIG_PCI || true
+scripts/config --disable CONFIG_INPUT || true
+scripts/config --disable CONFIG_WLAN || true
+scripts/config --disable CONFIG_VIDEO_DEV || true
+scripts/config --disable CONFIG_BT || true
+scripts/config --disable CONFIG_FIREWIRE || true
+scripts/config --disable CONFIG_MEDIA_SUPPORT || true
+scripts/config --disable CONFIG_DEBUG_INFO || true
+scripts/config --disable CONFIG_KALLSYMS || true
+scripts/config --disable CONFIG_PM || true
 
+# Ensure essential options stay enabled
+scripts/config --enable CONFIG_SERIAL_AMBA_PL011
+scripts/config --enable CONFIG_SERIAL_AMBA_PL011_CONSOLE
+scripts/config --enable CONFIG_DEVTMPFS
+scripts/config --enable CONFIG_DEVTMPFS_MOUNT
+scripts/config --enable CONFIG_BLK_DEV_INITRD
+scripts/config --enable CONFIG_VIRTIO
+scripts/config --enable CONFIG_EXT4_FS
+scripts/config --enable CONFIG_TMPFS
+scripts/config --enable CONFIG_PROC_FS
+scripts/config --enable CONFIG_SYSFS
+scripts/config --enable CONFIG_EFI_PARTITION
+scripts/config --enable CONFIG_ARM64
+scripts/config --enable CONFIG_ARCH_VEXPRESS
+
+echo "🔨 Rebuilding kernel config..."
+yes "" | make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} oldconfig
+
+echo "🚀 Building lightweight kernel..."
 BUILD_START=$(date +%s)
-make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} -j2 all
+make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} -j2 Image
 BUILD_END=$(date +%s)
+
 cp arch/arm64/boot/Image ${OUTDIR}/
 
 echo "✅ Kernel build complete in $((BUILD_END - BUILD_START)) seconds."
