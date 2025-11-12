@@ -18,7 +18,18 @@ BUSYBOX_VERSION=1_33_1
 FINDER_APP_DIR=$(realpath "$(dirname "$0")")
 
 ARCH=arm64
-CROSS_COMPILE=aarch64-linux-gnu-
+# Detect available cross-compiler prefix
+if command -v aarch64-none-linux-gnu-gcc &> /dev/null; then
+    CROSS_COMPILE=aarch64-none-linux-gnu-
+elif command -v aarch64-linux-gnu-gcc &> /dev/null; then
+    CROSS_COMPILE=aarch64-linux-gnu-
+else
+    echo "Error: No aarch64 cross-compiler found!"
+    exit 1
+fi
+
+ARCH=arm64
+
 
 echo "Using output directory: ${OUTDIR}"
 mkdir -p ${OUTDIR}
