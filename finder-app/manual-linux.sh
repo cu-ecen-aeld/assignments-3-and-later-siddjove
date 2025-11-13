@@ -1,95 +1,43 @@
-#!/bin/bash
-set -e
-
-OUTDIR=${1:-/tmp/aeld}
-ARCH=arm64
-
-echo "=========================================="
-echo "  AELD Assignment 3 - Manual Linux Build"
-echo "  Output dir: $OUTDIR"
-echo "=========================================="
-
-mkdir -p "$OUTDIR"
-cd "$OUTDIR"
-
 # -------------------------------
-# 1️⃣ Detect cross compiler
+# 4️⃣ Install BusyBox (static)
 # -------------------------------
-if command -v aarch64-linux-gnu-gcc &>/dev/null; then
-    CROSS=aarch64-linux-gnu-
-elif command -v aarch64-none-linux-gnu-gcc &>/dev/null; then
-    CROSS=aarch64-none-linux-gnu-
-else
-    echo "❌ ERROR: No aarch64 compiler found!"
-    exit 1
-fi
-
-echo "Using cross compiler: $CROSS"
-
-# -------------------------------
-# 2️⃣ Kernel (cached)
-# -------------------------------
-if [ ! -f "$OUTDIR/Image" ]; then
-    echo "🌐 Cloning Linux kernel..."
-    git clone --depth 1 --branch v5.15.163 \
-        https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git linux-stable
-
-    cd linux-stable
-    make ARCH=$ARCH CROSS_COMPILE=$CROSS defconfig
-    make -j$(nproc) ARCH=$ARCH CROSS_COMPILE=$CROSS Image
-
-    cp arch/arm64/boot/Image "$OUTDIR/Image"
-    cd "$OUTDIR"
-else
-    echo "🧩 Using cached kernel Image"
-fi
-
-# -------------------------------
-# 3️⃣ Build BusyBox static (cached)
-# -------------------------------
-if [ ! -f "$OUTDIR/busybox/busybox" ]; then
-    echo "🌐 Cloning BusyBox..."
-    git clone https://github.com/mirror/busybox.git busybox
-    cd busybox
-
-    git checkout 1_33_1
-    make distclean
-    make defconfig
-
-    # Force static busybox (so no glibc copied!)
-    sed -i 's/# CONFIG_STATIC is not set/CONFIG_STATIC=y/' .config
-    sed -i 's/# CONFIG_STATIC_LIBGCC is not set/CONFIG_STATIC_LIBGCC=y/' .config
-
-    echo "⚙️ Building BusyBox static..."
-    make -j$(nproc) ARCH=$ARCH CROSS_COMPILE=$CROSS
-    cd "$OUTDIR"
-else
-    echo "🧩 Using cached BusyBox build"
-fi
-
-# -------------------------------
-# 4️⃣ Create minimal rootfs
-# -------------------------------
-ROOTFS="$OUTDIR/rootfs"
-rm -rf "$ROOTFS"
-mkdir -p "$ROOTFS"
-
-mkdir -p "$ROOTFS"/{bin,sbin,etc,proc,sys,dev,home,finder-app,tmp}
-mkdir -p "$ROOTFS/home/finder-app/conf"
-
-# Install BusyBox
 cd "$OUTDIR/busybox"
-make CONFIG_PREFIX="$ROOTFS" install
+
+# Patch config for CI-safe static build
+scripts/config --file .config \
+    --enable CONFIG_STATIC \
+    --disable CONFIG_PAM \
+    --disable CONFIG_SELINUX \
+    --disable CONFIG_FEATURE_UTMP \
+    --disable CONFIG_FEATURE_WTMP \
+    --disable CONFIG_FEATURE_LAST_SUPPORTED \
+    --disable CONFIG_FEATURE_IPV6
+
+make -j$(nproc)
+
+# Install (works locally + on GitHub Actions)
+make CONFIG_PREFIX="$ROOTFS" install || sudo make CONFIG_PREFIX="$ROOTFS" install
+
+echo "✔ BusyBox installed into rootfs"
 
 # -------------------------------
 # 5️⃣ Copy finder-app files
 # -------------------------------
-APPDIR=~/assignment-3-siddjove/finder-app
+# Use repo-relative finder-app directory
+APPDIR="$REPO_ROOT/finder-app"
 
-cp "$APPDIR/finder.sh"       "$ROOTFS/home/finder-app/"
-cp "$APPDIR/finder-test.sh"  "$ROOTFS/home/finder-app/"
-cp "$APPDIR/writer"          "$ROOTFS/home/finder-app/"
-cp "$APPDIR/conf/"*          "$ROOTFS/home/finder-app/conf/"
+mkdir -p "$ROOTFS/home/finder-app/conf"
+
+# Copy scripts/binaries
+cp "$APPDIR/finder.sh"        "$ROOTFS/home/finder-app/"      || { echo "❌ Missing finder.sh"; exit 1; }
+cp "$APPDIR/finder-test.sh"   "$ROOTFS/home/finder-app/"      || { echo "❌ Missing finder-test.sh"; exit 1; }
+cp "$APPDIR/writer"           "$ROOTFS/home/finder-app/"      || { echo "❌ Missing writer binary"; exit 1; }
+
+# Copy conf files
+cp "$APPDIR/conf/"*           "$ROOTFS/home/finder-app/conf/" || { echo "❌ Missing conf files"; exit 1; }
+
+# Ensure everything is executable
+chmod +x "$ROOTFS/home/finder-app/"*
 
 echo "📂 Finder-app files copied."
 
@@ -104,22 +52,29 @@ mount -t devtmpfs none /dev
 
 echo "Init starting..."
 
-cd /home/finder-app
+cd /home/finder-app || exec /bin/sh
+chmod +x finder.sh finder-test.sh writer
+
 ./finder-test.sh
 
 poweroff -f
 EOF
 
 chmod +x "$ROOTFS/init"
+echo "✔ init script created"
 
 # -------------------------------
 # 7️⃣ Build initramfs
 # -------------------------------
 cd "$ROOTFS"
+
+# MUST be root-owned and executable
+sudo chown -R root:root "$ROOTFS"
+
 find . -print0 | cpio --null -ov --format=newc | gzip -9 > "$OUTDIR/initramfs.cpio.gz"
 
 echo "=========================================="
-echo "  ✔️ DONE"
+echo "  ✔️ Build Complete"
 echo "  Kernel:    $OUTDIR/Image"
 echo "  Initramfs: $OUTDIR/initramfs.cpio.gz"
 echo "=========================================="
