@@ -1,7 +1,11 @@
 #!/bin/sh
 # Ensure writer is built before running tests
+
+# make clean
+# make writer
+
 make clean
-make
+make writer
 
 # Tester script for assignment 1 and assignment 2
 # Author: Siddhant Jajoo
