@@ -7,7 +7,7 @@ set -euo pipefail
 # ---------- arguments ----------
 OUTDIR="${1:-/tmp/aeld}"
 KERNEL_TAG="v5.15.163"
-BUSYBOX_VERSION="1_33_1"    # busybox branch/tag style used by sources
+BUSYBOX_VERSION="1_33_1"    # BusyBox branch/tag style
 BUSYBOX_TARBALL="busybox-1.33.1.tar.bz2"
 BUSYBOX_URL="https://busybox.net/downloads/${BUSYBOX_TARBALL}"
 
@@ -24,7 +24,7 @@ OUTDIR="$(cd "${OUTDIR}" && pwd -P)"
 # ---------- helper: detect repo root ----------
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 if [ -z "${REPO_ROOT}" ]; then
-  # fallback used in CI/autograder: expect repo lives in current working dir
+  # fallback used in CI/autograder: assume current working dir is repo root
   REPO_ROOT="$(pwd -P)"
 fi
 echo "Detected repo root: ${REPO_ROOT}"
@@ -35,23 +35,14 @@ if command -v aarch64-none-linux-gnu-gcc >/dev/null 2>&1; then
   CROSS_PREFIX="aarch64-none-linux-gnu-"
 elif command -v aarch64-linux-gnu-gcc >/dev/null 2>&1; then
   CROSS_PREFIX="aarch64-linux-gnu-"
-elif command -v gcc >/dev/null 2>&1; then
-  # fallback to native gcc (useful for local x86 host builds of busybox - not for aarch64 target)
+else
   CROSS_PREFIX=""
-else
-  echo "❌ No compiler found (aarch64-none-linux-gnu-gcc or aarch64-linux-gnu-gcc). Install toolchain."
-  exit 1
 fi
-echo "Using cross-compiler prefix: '${CROSS_PREFIX}'"
 
-# wrapper for cross compile gcc (if prefix empty use native gcc)
-XC_CFLAGS=""
 if [ -n "${CROSS_PREFIX}" ]; then
-  XRUN_CROSS="${CROSS_PREFIX}"
-  echo "Cross compile commands will use prefix: ${CROSS_PREFIX}"
+  echo "Using cross-compiler prefix: '${CROSS_PREFIX}'"
 else
-  XRUN_CROSS=""
-  echo "No cross prefix detected; building BusyBox natively (useful only locally)."
+  echo "No aarch64 cross compiler found - BusyBox will be built natively (useful for local testing only)."
 fi
 
 # ---------- Step A: Build kernel Image if missing ----------
@@ -61,17 +52,16 @@ if [ ! -f "${KERNEL_IMAGE}" ]; then
   echo "🌐 Preparing kernel sources..."
   if [ ! -d "${KERNEL_DIR}" ]; then
     git clone --depth 1 --branch "${KERNEL_TAG}" \
-      https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git "${KERNEL_DIR}" || {
-      echo "❗ git clone kernel failed — make sure network works"; exit 1; }
+      https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git "${KERNEL_DIR}" \
+      || { echo "❗ git clone kernel failed — make sure network works"; exit 1; }
   fi
 
   cd "${KERNEL_DIR}"
   echo "Checking out ${KERNEL_TAG}"
-  git fetch --depth 1 origin "${KERNEL_TAG}" || true
-  git checkout "${KERNEL_TAG}" || true
+  git fetch --depth 1 origin "${KERNEL_TAG}" >/dev/null 2>&1 || true
+  git checkout "${KERNEL_TAG}" >/dev/null 2>&1 || true
 
   echo "⚙ Creating default config..."
-  # Use defconfig for aarch64
   if [ -n "${CROSS_PREFIX}" ]; then
     make ARCH=arm64 CROSS_COMPILE=${CROSS_PREFIX} defconfig
   else
@@ -80,9 +70,9 @@ if [ ! -f "${KERNEL_IMAGE}" ]; then
 
   echo "🔨 Building kernel Image (this may be slow)..."
   if [ -n "${CROSS_PREFIX}" ]; then
-    make ARCH=arm64 CROSS_COMPILE=${CROSS_PREFIX} -j"$(nproc)" Image
+    make ARCH=arm64 CROSS_COMPILE=${CROSS_PREFIX} -j"$(nproc)"
   else
-    make ARCH=arm64 -j"$(nproc)" Image
+    make ARCH=arm64 -j"$(nproc)"
   fi
 
   if [ -f "${KERNEL_DIR}/arch/arm64/boot/Image" ]; then
@@ -102,21 +92,33 @@ echo "📁 Preparing staging rootfs at ${ROOTFS}"
 rm -rf "${ROOTFS}"
 mkdir -p "${ROOTFS}"
 cd "${ROOTFS}"
-mkdir -p bin sbin dev etc proc sys tmp root mnt home var run usr/bin usr/sbin
+mkdir -p bin sbin dev etc proc sys tmp root mnt home var run usr/bin usr/sbin lib lib64
 
 # ---------- Step C: BusyBox build & install (static) ----------
 BUSYBOX_SRC_DIR="${OUTDIR}/busybox-${BUSYBOX_VERSION}"
 if [ ! -d "${BUSYBOX_SRC_DIR}" ]; then
-  echo "🌐 Downloading BusyBox tarball..."
+  echo "🌐 Obtaining BusyBox sources..."
   mkdir -p "${OUTDIR}/busybox-src"
   cd "${OUTDIR}/busybox-src"
-  if ! curl -fsSLO "${BUSYBOX_URL}" >/dev/null 2>&1; then
-    echo "⚠️ BusyBox tarball download failed; trying github mirror..."
-    BUSYBOX_URL_GIT="https://github.com/mirror/busybox.git"
-    git clone --depth 1 --branch "${BUSYBOX_VERSION}" "${BUSYBOX_URL_GIT}" "${BUSYBOX_SRC_DIR}" || true
-  else
-    tar xjf "${BUSYBOX_TARBALL}"
-    mv "busybox-1.33.1" "${BUSYBOX_SRC_DIR}"
+  # try download tarball
+  if command -v curl >/dev/null 2>&1; then
+    if curl -fLo "${BUSYBOX_TARBALL}" "${BUSYBOX_URL}"; then
+      tar xjf "${BUSYBOX_TARBALL}"
+      # extracted folder name expected busybox-1.33.1
+      if [ -d "busybox-1.33.1" ]; then
+        mv "busybox-1.33.1" "${BUSYBOX_SRC_DIR}"
+      fi
+    else
+      echo "⚠️ BusyBox tarball download failed; trying git mirror..."
+    fi
+  fi
+
+  # fallback: try git mirror
+  if [ ! -d "${BUSYBOX_SRC_DIR}" ]; then
+    if command -v git >/dev/null 2>&1; then
+      BUSYBOX_MIRROR="https://github.com/mirror/busybox.git"
+      git clone --depth 1 --branch "${BUSYBOX_VERSION}" "${BUSYBOX_MIRROR}" "${BUSYBOX_SRC_DIR}" || true
+    fi
   fi
 fi
 
@@ -126,21 +128,23 @@ if [ ! -d "${BUSYBOX_SRC_DIR}" ]; then
 fi
 
 cd "${BUSYBOX_SRC_DIR}"
-# Start from defconfig
 make distclean >/dev/null 2>&1 || true
 make defconfig
 
-# Enable static build via simple sed (works with defconfig)
-# Prefer CONFIG_STATIC=y
+# Ensure static build and disable bulky features (safe edits)
+# set CONFIG_STATIC=y (defconfig may have it commented out)
 if ! grep -q "^CONFIG_STATIC=y" .config 2>/dev/null; then
   sed -i 's/# CONFIG_STATIC is not set/CONFIG_STATIC=y/' .config || true
 fi
-# Remove large optional features (PAM, selinux, ipv6, utmp/wtmp) to keep busybox small
+# disable PAM, SELINUX, UTMP/WTMP, IPV6 if present
 sed -i 's/^CONFIG_PAM=.*/# CONFIG_PAM is not set/' .config || true
 sed -i 's/^CONFIG_SELINUX=.*/# CONFIG_SELINUX is not set/' .config || true
+sed -i 's/^CONFIG_FEATURE_UTMP=.*/# CONFIG_FEATURE_UTMP is not set/' .config || true
+sed -i 's/^CONFIG_FEATURE_WTMP=.*/# CONFIG_FEATURE_WTMP is not set/' .config || true
+sed -i 's/^CONFIG_FEATURE_LAST_SUPPORTED=.*/# CONFIG_FEATURE_LAST_SUPPORTED is not set/' .config || true
+sed -i 's/^CONFIG_FEATURE_IPV6=.*/# CONFIG_FEATURE_IPV6 is not set/' .config || true
 
 echo "🔧 Building BusyBox (static). This may take a bit..."
-# If cross prefix set, use it for build target
 if [ -n "${CROSS_PREFIX}" ]; then
   make ARCH=arm64 CROSS_COMPILE=${CROSS_PREFIX} -j"$(nproc)"
   make ARCH=arm64 CROSS_COMPILE=${CROSS_PREFIX} CONFIG_PREFIX="${ROOTFS}" install
@@ -153,12 +157,11 @@ echo "✔ BusyBox installed into rootfs"
 
 # ---------- Step D: copy library dependencies (only if cross-compiled and needed) ----------
 if [ -n "${CROSS_PREFIX}" ]; then
-  # Determine sysroot from cross-gcc if available
   if command -v "${CROSS_PREFIX}gcc" >/dev/null 2>&1; then
     SYSROOT="$(${CROSS_PREFIX}gcc -print-sysroot 2>/dev/null || true)"
     if [ -n "${SYSROOT}" ] && [ -d "${SYSROOT}" ]; then
       echo "📚 Copying library dependencies from sysroot ${SYSROOT}"
-      # copy lib and lib64 if present
+      mkdir -p "${ROOTFS}/lib"
       cp -a "${SYSROOT}/lib"/* "${ROOTFS}/lib/" 2>/dev/null || true
       cp -a "${SYSROOT}/lib64"/* "${ROOTFS}/lib/" 2>/dev/null || true
     fi
@@ -173,7 +176,6 @@ if [ ! -d "${APPDIR}" ]; then
 fi
 
 echo "📄 Copying finder-app files from ${APPDIR}..."
-
 mkdir -p "${ROOTFS}/home/finder-app"
 mkdir -p "${ROOTFS}/home/finder-app/conf"
 
@@ -216,7 +218,7 @@ else
   exit 1
 fi
 
-# Make scripts executable inside staging (these become executable inside initramfs)
+# Make scripts executable inside staging
 chmod +x "${ROOTFS}/home/finder-app/"* || true
 echo "📂 Finder-app files copied."
 
@@ -233,7 +235,7 @@ cd /home/finder-app || exec /bin/sh
 # ensure scripts are executable
 chmod +x ./finder.sh ./finder-test.sh ./writer 2>/dev/null || true
 
-# Use finder-test.sh to run tests (it will use default values if make is not present)
+# Run the test script. finder-test.sh is written to succeed without 'make' present.
 ./finder-test.sh || true
 
 # If finder-test.sh didn't poweroff, force
@@ -244,9 +246,9 @@ EOF
 chmod +x "${ROOTFS}/init" || true
 
 # ---------- Step G: Build initramfs (set owner inside cpio to root:root) ----------
-echo "📦 Creating initramfs (this will set owner root:root inside archive)..."
+echo "📦 Creating initramfs (root-owned files inside archive)..."
 cd "${ROOTFS}"
-# Use --owner root:root so files in archive are root-owned; don't require chown on host
+# Use --owner so files in archive are root-owned regardless of host permissions
 find . -print0 | cpio --null -ov --format=newc --owner root:root 2>/dev/null | gzip -9 > "${OUTDIR}/initramfs.cpio.gz"
 sync
 
