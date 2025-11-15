@@ -1,28 +1,72 @@
+
 #!/bin/sh
-# finder.sh
-# Author: Siddjove
+# Tester script for assignment 1 and assignment 2
+# Author: Siddhant Jajoo
 
-filesdir=$1
-searchstr=$2
+set -e
+set -u
 
-# Validate input
-if [ $# -ne 2 ]; then
-    echo "Error: Two arguments required. Usage: $0 <filesdir> <searchstr>"
-    exit 1
+NUMFILES=10
+WRITESTR=AELD_IS_FUN
+WRITEDIR=/tmp/aeld-data
+username=$(cat /etc/finder-app/conf/username.txt)
+
+if [ $# -lt 3 ]
+then
+	echo "Using default value ${WRITESTR} for string to write"
+	if [ $# -lt 1 ]
+	then
+		echo "Using default value ${NUMFILES} for number of files to write"
+	else
+		NUMFILES=$1
+	fi	
+else
+	NUMFILES=$1
+	WRITESTR=$2
+	WRITEDIR=/tmp/aeld-data/$3
 fi
 
-# Check if directory exists
-if [ ! -d "$filesdir" ]; then
-    echo "Error: Directory $filesdir does not exist"
-    exit 1
+MATCHSTR="The number of files are ${NUMFILES} and the number of matching lines are ${NUMFILES}"
+
+echo "Writing ${NUMFILES} files containing string ${WRITESTR} to ${WRITEDIR}"
+
+rm -rf "${WRITEDIR}"
+
+# create $WRITEDIR if not assignment1
+assignment=`cat /etc/finder-app/conf/assignment.txt`
+
+if [ $assignment != 'assignment1' ]
+then
+	mkdir -p "$WRITEDIR"
+
+	#The WRITEDIR is in quotes because if the directory path consists of spaces, then variable substitution will consider it as multiple argument.
+	#The quotes signify that the entire string in WRITEDIR is a single string.
+	#This issue can also be resolved by using double square brackets i.e [[ ]] instead of using quotes.
+	if [ -d "$WRITEDIR" ]
+	then
+		echo "$WRITEDIR created"
+	else
+		exit 1
+	fi
 fi
 
-# Count total files and matching lines
-num_files=$(find "$filesdir" -type f | wc -l)
-num_matches=$(grep -r "$searchstr" "$filesdir" 2>/dev/null | wc -l)
+for i in $( seq 1 $NUMFILES)
+do
+    /bin/writer "$WRITEDIR/${username}$i.txt" "$WRITESTR"
+done
 
-# Print result
-echo "The number of files are $num_files and the number of matching lines are $num_matches"
+OUTPUTSTRING=$(/bin/finder.sh "$WRITEDIR" "$WRITESTR")
 
-exit 0
+# remove temporary directories
+rm -rf /tmp/aeld-data
+
+set +e
+echo ${OUTPUTSTRING} | grep "${MATCHSTR}" > /tmp/assignment4-result.txt
+if [ $? -eq 0 ]; then
+	echo "success"
+	exit 0
+else
+	echo "failed: expected  ${MATCHSTR} in ${OUTPUTSTRING} but instead found"
+	exit 1
+fi
 
