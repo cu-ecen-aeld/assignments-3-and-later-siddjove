@@ -107,8 +107,10 @@ CONFIG_WHOIS
 CONFIG_TRACEROUTE
 CONFIG_UDHCPC
 CONFIG_UDHCPD
+CONFIG_TC
+CONFIG_TC_STANDALONE
+CONFIG_FEATURE_TC_INGRESS
 "
-
 for opt in $disable_list; do
     sed -i "s/$opt=y/# $opt is not set/" .config
 done
@@ -173,5 +175,18 @@ find . | cpio -H newc -ov --owner root:root > "${OUTDIR}/initramfs.cpio"
 gzip -f "${OUTDIR}/initramfs.cpio"
 
 echo "Done. Kernel and initramfs ready."
+
+########################################
+# Copy Image + initramfs for autograder
+########################################
+
+echo "Installing kernel & initramfs for autograder..."
+
+mkdir -p /tmp/aesd-autograder
+
+cp "${OUTDIR}/Image" /tmp/aesd-autograder/Image
+cp "${OUTDIR}/initramfs.cpio.gz" /tmp/aesd-autograder/initramfs.cpio.gz
+
+echo "Autograder files installed."
 
 
