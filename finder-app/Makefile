@@ -1,5 +1,5 @@
-CC := $(CROSS_COMPILE)gcc
-CFLAGS := -Wall -Werror
+CC = gcc
+CFLAGS = -Wall -Werror
 
 .PHONY: all clean
 
@@ -13,3 +13,4 @@ writer.o: writer.c
 
 clean:
 	rm -f writer writer.o
+

@@ -1,138 +1,177 @@
 #!/bin/bash
-# Script outline to install and build kernel.
-# Author: Siddhant Jajoo.  (Modified & fixed)
+# Assignment 3 Part 2 – Manual Kernel + RootFS Build
+# Clean, static, simple, correct working version
+# Author: Siddjove 
 
 set -e
 set -u
 
-OUTDIR=/tmp/aeld
-KERNEL_REPO=git://git.kernel.org/pub/scm/linux/kernel/git/stable/linux-stable.git
-KERNEL_VERSION=v5.15.163
-BUSYBOX_VERSION=1_33_1
-FINDER_APP_DIR=$(realpath $(dirname $0))
+########################
+# Variables
+########################
+OUTDIR=${1:-/tmp/aeld}
+KERNEL_VERSION=linux-5.15.y
+KERNEL_REPO=https://github.com/gregkh/linux.git
+
+
 ARCH=arm64
 CROSS_COMPILE=aarch64-linux-gnu-
-SYSROOT=$(${CROSS_COMPILE}gcc -print-sysroot)
+FINDER_APP_DIR=$(realpath $(dirname $0))
 
+echo "Using OUTDIR = ${OUTDIR}"
+mkdir -p "${OUTDIR}"
 
-
-
-
-if [ $# -lt 1 ]
-then
-    echo "Using default directory ${OUTDIR} for output"
-else
-    OUTDIR=$1
-    echo "Using passed directory ${OUTDIR} for output"
-fi
-
-mkdir -p ${OUTDIR}
 cd "${OUTDIR}"
 
-########## KERNEL BUILD ##########
-if [ ! -d "${OUTDIR}/linux-stable" ]; then
-    echo "CLONING LINUX ${KERNEL_VERSION}"
-    git clone ${KERNEL_REPO} --depth 1 --single-branch --branch ${KERNEL_VERSION}
+########################
+# Clone Kernel Repo (stable, fast)
+########################
+if [ ! -d linux-stable ]; then
+    echo "Cloning Linux STABLE kernel (GregKH mirror)..."
+    git clone --depth 1 --branch linux-5.15.y https://github.com/gregkh/linux.git linux-stable
 fi
 
-if [ ! -e ${OUTDIR}/linux-stable/arch/${ARCH}/boot/Image ]; then
+########################
+# Build Minimal Kernel (NON-INTERACTIVE)
+########################
+if [ ! -e linux-stable/arch/${ARCH}/boot/Image ]; then
     cd linux-stable
-    echo "Checking out version ${KERNEL_VERSION}"
-    git checkout ${KERNEL_VERSION}
 
-    make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} mrproper
+    # always start clean
+    make mrproper
+
+    # generate ARM64 default config
     make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} defconfig
-    make -j$(nproc) ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} all
-    make -j$(nproc) ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} modules
+
+    # DO NOT modify .config → removes interactive oldconfig prompts
+
+    # build only the Image (no modules, no extras)
+    make -j$(nproc) ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} Image
     make -j$(nproc) ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} dtbs
 fi
 
 echo "Copying kernel Image..."
-cp ${OUTDIR}/linux-stable/arch/${ARCH}/boot/Image ${OUTDIR}/
 
-########## ROOT FS ##########
-echo "Creating root filesystem..."
-cd "${OUTDIR}"
-
-if [ -d rootfs ]; then
-    echo "Deleting rootfs and recreating"
-    sudo rm -rf rootfs
+if [ -f "${OUTDIR}/linux-stable/arch/${ARCH}/boot/Image" ]; then
+    cp "${OUTDIR}/linux-stable/arch/${ARCH}/boot/Image" "${OUTDIR}/"
+elif [ -f "${OUTDIR}/linux-stable/arch/${ARCH}/boot/Image.gz" ]; then
+    echo "Kernel built Image.gz — using that as Image"
+    cp "${OUTDIR}/linux-stable/arch/${ARCH}/boot/Image.gz" "${OUTDIR}/Image"
+else
+    echo "ERROR: No kernel Image or Image.gz found!"
+    exit 1
 fi
 
-mkdir -p rootfs/{bin,sbin,etc,proc,sys,usr/{bin,sbin},lib,dev,home,tmp,var}
 
-########## BUSYBOX ##########
+
+########################
+# Create RootFS Staging Area
+########################
 cd "${OUTDIR}"
 
-BUSYBOX_TARBALL_VERSION=$(echo ${BUSYBOX_VERSION} | tr '_' '.')
+echo "Creating clean rootfs..."
+sudo rm -rf rootfs || true
+mkdir -p rootfs/{bin,sbin,etc,proc,sys,usr/{bin,sbin},dev,home,tmp,var}
+
+########################
+# Build Minimal BusyBox (works with latest repo)
+########################
+
+cd "${OUTDIR}"
 
 if [ ! -d busybox ]; then
-    echo "Downloading BusyBox ${BUSYBOX_TARBALL_VERSION}..."
-    wget https://busybox.net/downloads/busybox-${BUSYBOX_TARBALL_VERSION}.tar.bz2
-    tar -xjf busybox-${BUSYBOX_TARBALL_VERSION}.tar.bz2
-    mv busybox-${BUSYBOX_TARBALL_VERSION} busybox
-    cd busybox
-    make distclean
-    make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} defconfig
-else
-    cd busybox
+    echo "Cloning BusyBox (official repo)..."
+    git clone --depth 1 https://git.busybox.net/busybox busybox
 fi
 
+cd busybox
 
-make -j$(nproc) ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE}
-make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} CONFIG_PREFIX=${OUTDIR}/rootfs install
+make distclean
+make defconfig
 
-echo "Library dependencies:"
-${CROSS_COMPILE}readelf -a ${OUTDIR}/rootfs/bin/busybox | grep "interpreter"
-${CROSS_COMPILE}readelf -a ${OUTDIR}/rootfs/bin/busybox | grep "Shared library"
+# Force static build
+sed -i 's/# CONFIG_STATIC is not set/CONFIG_STATIC=y/' .config
 
-########## COPY LIBRARIES SAFELY ##########
-cd "${OUTDIR}/rootfs"
+# Disable heavy networking features
+disable_list="
+CONFIG_WGET
+CONFIG_TELNET
+CONFIG_TELNETD
+CONFIG_PING
+CONFIG_IP
+CONFIG_ROUTE
+CONFIG_NSLOOKUP
+CONFIG_NTPD
+CONFIG_TFTP
+CONFIG_WHOIS
+CONFIG_TRACEROUTE
+CONFIG_UDHCPC
+CONFIG_UDHCPD
+"
 
-INTERPRETER=$(${CROSS_COMPILE}readelf -a bin/busybox | grep "Requesting program interpreter" | awk -F':' '{print $2}' | tr -d '[] ')
-LIBS=$(${CROSS_COMPILE}readelf -a bin/busybox | grep "Shared library" | awk -F':' '{print $2}' | tr -d '[] ')
-
-echo "Copying interpreter: $INTERPRETER"
-cp -v "$SYSROOT$INTERPRETER" lib/
-
-mkdir -p lib/aarch64-linux-gnu/
-
-echo "Copying shared libs..."
-set +e  # prevent script crash if find fails
-for lib in $LIBS; do
-    FOUND=$(find "$SYSROOT" -type f -name "$lib" | head -n 1)
-    if [ -n "$FOUND" ]; then
-        cp -v "$FOUND" lib/aarch64-linux-gnu/
-    else
-        echo "WARNING: Could not find library $lib"
-    fi
+for opt in $disable_list; do
+    sed -i "s/$opt=y/# $opt is not set/" .config
 done
-set -e
 
-########## DEVICE NODES ##########
+# IMPORTANT: regenerate dependencies + auto-answer NEW options
+yes "" | make oldconfig
+
+# Build BusyBox
+make -j$(nproc) ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE}
+
+# Install
+make CONFIG_PREFIX="${OUTDIR}/rootfs" ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} install
+
+########################
+# Create Device Nodes
+########################
+cd "${OUTDIR}/rootfs"
 sudo mknod -m 666 dev/null c 1 3
 sudo mknod -m 600 dev/console c 5 1
 
-########## WRITER UTILITY ##########
+########################
+# Build Writer (static)
+########################
 cd "$FINDER_APP_DIR"
 make clean
 make CROSS_COMPILE=${CROSS_COMPILE}
-cp writer ${OUTDIR}/rootfs/home/
 
-########## COPY APPLICATION FILES ##########
-cp finder.sh ${OUTDIR}/rootfs/home/
-cp finder-test.sh ${OUTDIR}/rootfs/home/
-cp conf/username.txt ${OUTDIR}/rootfs/home/
-cp conf/assignment.txt ${OUTDIR}/rootfs/home/
-cp autorun-qemu.sh ${OUTDIR}/rootfs/home/
+cp writer "${OUTDIR}/rootfs/home/"
 
-sudo chown -R root:root ${OUTDIR}/rootfs
+########################
+# Copy Finder Scripts
+########################
+cp finder.sh "${OUTDIR}/rootfs/home/"
+cp finder-test.sh "${OUTDIR}/rootfs/home/"
+cp autorun-qemu.sh "${OUTDIR}/rootfs/home/"
 
-########## INITRAMFS ##########
-cd ${OUTDIR}/rootfs
+mkdir -p "${OUTDIR}/rootfs/home/conf/"
+cp conf/assignment.txt "${OUTDIR}/rootfs/home/conf/"
+cp conf/username.txt "${OUTDIR}/rootfs/home/conf/"
+
+# Modify finder-test.sh path
+sed -i 's|\.\./conf/assignment.txt|conf/assignment.txt|' "${OUTDIR}/rootfs/home/finder-test.sh"
+
+########################
+# Create SIMPLE init script
+########################
+cat << 'EOF' > "${OUTDIR}/rootfs/init"
+#!/bin/sh
+mount -t proc none /proc
+mount -t sysfs none /sys
+exec /bin/sh
+EOF
+
+chmod +x "${OUTDIR}/rootfs/init"
+
+########################
+# Build initramfs
+########################
+cd "${OUTDIR}/rootfs"
 echo "Creating initramfs..."
-find . | cpio -H newc -ov --owner root:root > ${OUTDIR}/initramfs.cpio
-gzip -f ${OUTDIR}/initramfs.cpio
+find . | cpio -H newc -ov --owner root:root > "${OUTDIR}/initramfs.cpio"
+gzip -f "${OUTDIR}/initramfs.cpio"
 
-echo "Done."
+echo "Done. Kernel and initramfs ready."
+
 

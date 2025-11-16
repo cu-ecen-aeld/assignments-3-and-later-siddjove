@@ -1,12 +1,16 @@
-CC=$(CROSS_COMPILE)gcc
-CFLAGS=-Wall -Werror
-TARGET=writer
+CC = gcc
+CFLAGS = -Wall -Werror
 
-all: $(TARGET)
+.PHONY: all clean
 
-$(TARGET): writer.c
-	$(CC) $(CFLAGS) -o $(TARGET) writer.c
+all: writer
+
+writer: writer.o
+	$(CC) $(CFLAGS) -o writer writer.o
+
+writer.o: writer.c
+	$(CC) $(CFLAGS) -c writer.c
 
 clean:
-	rm -f $(TARGET) *.o
+	rm -f writer writer.o
 
