@@ -32,3 +32,4 @@ initramfs.cpio.gz
 *.swp
 *.swo
 *~
+finder-app/manual-linux.sh.bak
