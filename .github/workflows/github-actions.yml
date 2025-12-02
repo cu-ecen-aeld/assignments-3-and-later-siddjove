@@ -7,17 +7,14 @@ on:
   pull_request:
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-
+  unit-test:
+    container: cuaesd/aesd-autotest:24-unit-test
+    runs-on: self-hosted
     steps:
-    - uses: actions/checkout@v4
-      with:
-        submodules: recursive
+      - uses: actions/checkout@v2
+      - name: Checkout submodules
+        run: git submodule update --init --recursive
+      - name: Run unit test
+        run: ./unit-test.sh
 
-    - name: Install Dependencies
-      run: sudo apt-get update && sudo apt-get install -y qemu-system-aarch64 gcc-aarch64-linux-gnu build-essential
-
-    - name: Run full test
-      run: bash ./full-test.sh
-
+  
