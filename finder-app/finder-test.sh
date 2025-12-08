@@ -50,7 +50,7 @@ if [ $# -eq 0 ]; then
         exit 1
     fi
 
-    # For A4: if filesdir (e.g. /tmp/aesd-data) does not exist, create it
+    # 🔴 IMPORTANT: for A4, create filesdir if it doesn't exist
     if [ ! -d "${FILESDIR}" ]; then
         mkdir -p "${FILESDIR}"
     fi
