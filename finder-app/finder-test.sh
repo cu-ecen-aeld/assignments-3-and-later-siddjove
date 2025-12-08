@@ -1,12 +1,12 @@
 #!/bin/sh
 #
 # finder-test.sh
-# Test harness for the Finder assignment, A4-compatible version.
-# - If run with two args: usage is ./finder-test.sh <directory> <search string>
+# A4-compatible test harness.
+# - If run with two args: ./finder-test.sh <directory> <search string>
 # - If run with no args: uses /etc/finder-app/conf/assignment.txt
 # Assumes:
-#   - finder.sh is in the PATH (e.g. /usr/bin/finder.sh)
-#   - config files are in /etc/finder-app/conf
+#   - finder.sh is in PATH (e.g. /usr/bin/finder.sh)
+#   - config file defines filesdir and searchstr
 #   - Output of finder.sh is written to /tmp/assignment4-result.txt
 
 set -eu
@@ -23,7 +23,7 @@ usage() {
     exit 1
 }
 
-# Ensure finder.sh is available in PATH
+# Ensure finder.sh is available
 if ! command -v finder.sh >/dev/null 2>&1; then
     echo "Error: finder.sh not found in PATH"
     exit 1
@@ -39,23 +39,21 @@ if [ $# -eq 0 ]; then
         exit 1
     fi
 
-    # Source the config file.
-    # Expected to define variables like:
-    #   filesdir=/path/to/search
-    #   searchstr=string_to_find
-    # or uppercase variants.
     # shellcheck source=/dev/null
     . "${ASSIGNMENT_CONF}"
 
-    # Try multiple possible variable names for robustness
     FILESDIR="${filesdir:-${FILES_DIR:-}}"
     searchstr="${searchstr:-${SEARCH_STR:-}}"
 
     if [ -z "${FILESDIR}" ] || [ -z "${searchstr}" ]; then
-        echo "Error: ${ASSIGNMENT_CONF} must define filesdir/FILESDIR and searchstr/SEARCH_STR"
+        echo "Error: ${ASSIGNMENT_CONF} must define filesdir and searchstr"
         exit 1
     fi
 
+    # For A4: if filesdir (e.g. /tmp/aesd-data) does not exist, create it
+    if [ ! -d "${FILESDIR}" ]; then
+        mkdir -p "${FILESDIR}"
+    fi
 elif [ $# -eq 2 ]; then
     FILESDIR="$1"
     searchstr="$2"
@@ -74,7 +72,6 @@ echo "  Search string: '${searchstr}'"
 echo "  Output file  : ${OUTPUT_FILE}"
 
 # Run finder.sh and capture its output into /tmp/assignment4-result.txt
-# Also echo it to the console using tee
 if ! finder.sh "${FILESDIR}" "${searchstr}" | tee "${OUTPUT_FILE}"; then
     echo "finder.sh reported failure"
     exit 2
@@ -82,4 +79,3 @@ fi
 
 echo "finder-test.sh completed successfully"
 exit 0
-
