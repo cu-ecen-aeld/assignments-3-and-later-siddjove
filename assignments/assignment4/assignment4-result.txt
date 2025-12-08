@@ -1,0 +1,2 @@
+Using default value AELD_IS_FUN for string to write
+Writing /tmp/aesd-data files containing string AELD_IS_FUN to /tmp/aeld-data
