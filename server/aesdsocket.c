@@ -215,7 +215,7 @@ int main(int argc, char *argv[])
             }
         }
 
-        if (packet && packet_complete) {
+            if (packet && (packet_complete || packet_size > 0)) {
             // append packet to data file
             int data_fd = open(DATA_FILE, O_WRONLY | O_CREAT | O_APPEND, 0644);
             if (data_fd == -1) {
