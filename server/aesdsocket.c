@@ -178,12 +178,13 @@ int main(int argc, char *argv[])
 
         syslog(LOG_INFO, "Accepted connection from %s", client_ip);
 
-        // receive and write each chunk immediately; stop when we see '\n' or client closes
+        // receive until newline OR client closes (no-newline packets)
         char recv_buf[1024];
-        bool saw_data = false;
-        bool newline_found = false;
+        char *packet = NULL;
+        size_t packet_size = 0;
+        bool packet_complete = false;
 
-        while (!newline_found && !exit_requested) {
+        while (!packet_complete && !exit_requested) {
             ssize_t bytes = recv(clientfd, recv_buf, sizeof(recv_buf), 0);
             if (bytes < 0) {
                 if (errno == EINTR && exit_requested) {
@@ -192,55 +193,46 @@ int main(int argc, char *argv[])
                 syslog(LOG_ERR, "recv failed: %s", strerror(errno));
                 break;
             } else if (bytes == 0) {
-                /* client closed the connection */
+                // client closed
                 break;
             }
 
-            /* write what we received immediately to the data file */
-            int data_fd = open(DATA_FILE, O_WRONLY | O_CREAT | O_APPEND, 0644);
-            if (data_fd == -1) {
-                syslog(LOG_ERR, "open data file failed: %s", strerror(errno));
+            char *new_packet = realloc(packet, packet_size + (size_t)bytes);
+            if (!new_packet) {
+                syslog(LOG_ERR, "realloc failed");
+                free(packet);
+                packet = NULL;
                 break;
             }
-            ssize_t written = write(data_fd, recv_buf, (size_t)bytes);
-            if (written == -1) {
-                syslog(LOG_ERR, "write data file failed: %s", strerror(errno));
-                close(data_fd);
-                break;
-            }
-            close(data_fd);
 
-            saw_data = true;
+            packet = new_packet;
+            memcpy(packet + packet_size, recv_buf, (size_t)bytes);
+            packet_size += (size_t)bytes;
 
-            /* check the just-received chunk for newline */
-            for (ssize_t i = 0; i < bytes; i++) {
-                if (recv_buf[i] == '\n') {
-                    newline_found = true;
+            // check for newline anywhere in the accumulated packet
+            for (size_t i = 0; i < packet_size; i++) {
+                if (packet[i] == '\n') {
+                    packet_complete = true;
                     break;
                 }
             }
         }
 
-        /* if we received anything (even no newline), send the entire file back */
-        if (saw_data || newline_found) {
-            int read_fd = open(DATA_FILE, O_RDONLY);
-            if (read_fd == -1) {
-                syslog(LOG_ERR, "open data file for read failed: %s", strerror(errno));
+        // Handle both:
+        //  - "normal" packets ending in '\n'
+        //  - last packet where client closed without newline (packet_size > 0)
+        if (packet && (packet_complete || packet_size > 0)) {
+            // append packet to data file
+            int data_fd = open(DATA_FILE, O_WRONLY | O_CREAT | O_APPEND, 0644);
+            if (data_fd == -1) {
+                syslog(LOG_ERR, "open data file failed: %s", strerror(errno));
             } else {
-                ssize_t rbytes;
-                while ((rbytes = read(read_fd, recv_buf, sizeof(recv_buf))) > 0) {
-                    ssize_t sent = send(clientfd, recv_buf, (size_t)rbytes, 0);
-                    if (sent == -1) {
-                        syslog(LOG_ERR, "send failed: %s", strerror(errno));
-                        break;
-                    }
+                ssize_t written = write(data_fd, packet, packet_size);
+                if (written == -1) {
+                    syslog(LOG_ERR, "write data file failed: %s", strerror(errno));
                 }
-                if (rbytes == -1) {
-                    syslog(LOG_ERR, "read data file failed: %s", strerror(errno));
-                }
-                close(read_fd);
+                close(data_fd);
             }
-        }
 
             // send entire file back to client
             int read_fd = open(DATA_FILE, O_RDONLY);
@@ -285,3 +277,4 @@ int main(int argc, char *argv[])
     closelog();
     return EXIT_SUCCESS;
 }
+
