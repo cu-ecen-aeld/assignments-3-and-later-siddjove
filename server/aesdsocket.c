@@ -30,12 +30,14 @@ static int setup_signals(void)
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = signal_handler;
+
     if (sigaction(SIGINT, &sa, NULL) == -1) {
         return -1;
     }
     if (sigaction(SIGTERM, &sa, NULL) == -1) {
         return -1;
     }
+
     return 0;
 }
 
@@ -176,7 +178,7 @@ int main(int argc, char *argv[])
 
         syslog(LOG_INFO, "Accepted connection from %s", client_ip);
 
-        // receive until newline
+        // receive until newline OR client closes (no-newline packets)
         char recv_buf[1024];
         char *packet = NULL;
         size_t packet_size = 0;
@@ -202,11 +204,12 @@ int main(int argc, char *argv[])
                 packet = NULL;
                 break;
             }
+
             packet = new_packet;
             memcpy(packet + packet_size, recv_buf, (size_t)bytes);
             packet_size += (size_t)bytes;
 
-            // check for newline
+            // check for newline anywhere in the accumulated packet
             for (size_t i = 0; i < packet_size; i++) {
                 if (packet[i] == '\n') {
                     packet_complete = true;
@@ -215,7 +218,10 @@ int main(int argc, char *argv[])
             }
         }
 
-            if (packet && (packet_complete || packet_size > 0)) {
+        // Handle both:
+        //  - "normal" packets ending in '\n'
+        //  - last packet where client closed without newline (packet_size > 0)
+        if (packet && (packet_complete || packet_size > 0)) {
             // append packet to data file
             int data_fd = open(DATA_FILE, O_WRONLY | O_CREAT | O_APPEND, 0644);
             if (data_fd == -1) {
@@ -271,4 +277,3 @@ int main(int argc, char *argv[])
     closelog();
     return EXIT_SUCCESS;
 }
-
