@@ -1,35 +1,37 @@
 #!/bin/sh
 ### BEGIN INIT INFO
 # Provides:          aesdsocket
-# Required-Start:    $network $syslog
-# Required-Stop:     $network $syslog
+# Required-Start:    $network $local_fs
+# Required-Stop:     $network $local_fs
 # Default-Start:     S
 # Default-Stop:      0 6
-# Short-Description: Start/Stop aesdsocket daemon
+# Short-Description: Start/stop aesdsocket daemon
 ### END INIT INFO
 
 DAEMON=/usr/bin/aesdsocket
-DAEMON_OPTS="-d"
 PIDFILE=/var/run/aesdsocket.pid
-LOGTAG="aesdsocket"
+DAEMON_OPTS="-d"
 
 case "$1" in
   start)
     echo "Starting aesdsocket..."
-    # start-stop-daemon will create the pidfile; do NOT use --background because the daemon will daemonize (-d)
-    start-stop-daemon --start --oknodo --make-pidfile --pidfile "${PIDFILE}" --exec "${DAEMON}" -- ${DAEMON_OPTS} || {
-      echo "Failed to start aesdsocket" >&2
-      exit 1
-    }
+    if command -v start-stop-daemon >/dev/null 2>&1; then
+      start-stop-daemon -S -x $DAEMON -- $DAEMON_OPTS
+    else
+      # fallback for minimal busybox systems: use nohup & background
+      nohup $DAEMON $DAEMON_OPTS >/dev/null 2>&1 &
+      echo $! > "$PIDFILE" || true
+    fi
     ;;
   stop)
     echo "Stopping aesdsocket..."
-    start-stop-daemon --stop --pidfile "${PIDFILE}" --retry 5 || {
-      echo "Failed to stop aesdsocket" >&2
-      exit 1
-    }
-    # ensure pidfile removed
-    [ -f "${PIDFILE}" ] && rm -f "${PIDFILE}"
+    if [ -f "$PIDFILE" ]; then
+      kill -TERM $(cat "$PIDFILE") 2>/dev/null || true
+      rm -f "$PIDFILE"
+    else
+      # best-effort kill
+      pkill -f $(basename $DAEMON) || true
+    fi
     ;;
   restart)
     $0 stop
@@ -37,8 +39,8 @@ case "$1" in
     $0 start
     ;;
   status)
-    if [ -f "${PIDFILE}" ] && kill -0 $(cat "${PIDFILE}") 2>/dev/null; then
-      echo "aesdsocket running (pid $(cat ${PIDFILE}))"
+    if pidof $(basename $DAEMON) >/dev/null 2>&1; then
+      echo "aesdsocket running"
       exit 0
     else
       echo "aesdsocket not running"
@@ -52,4 +54,5 @@ case "$1" in
 esac
 
 exit 0
+
 
