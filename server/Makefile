@@ -11,4 +11,3 @@ aesdsocket: aesdsocket.c
 .PHONY: clean
 clean:
 	-rm -f aesdsocket
-
