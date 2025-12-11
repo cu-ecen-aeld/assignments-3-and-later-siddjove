@@ -1,33 +1,27 @@
 #!/bin/sh
 ### BEGIN INIT INFO
 # Provides:          aesdsocket
-# Required-Start:    $network $local_fs
-# Required-Stop:     $network $local_fs
-# Default-Start:     S
-# Default-Stop:      0 6
-# Short-Description: Start/stop aesdsocket daemon
+# Required-Start:    $remote_fs $syslog
+# Required-Stop:     $remote_fs $syslog
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: Start aesdsocket daemon
 ### END INIT INFO
 
 DAEMON=/usr/bin/aesdsocket
-PIDFILE=/var/run/aesdsocket.pid
-DAEMON_OPTS="-d"
+NAME=aesdsocket
+PIDFILE=/var/run/${NAME}.pid
+DESC="AESD socket daemon"
 
 case "$1" in
   start)
-    if command -v start-stop-daemon >/dev/null 2>&1; then
-      start-stop-daemon -S -x $DAEMON -- $DAEMON_OPTS
-    else
-      nohup $DAEMON $DAEMON_OPTS >/dev/null 2>&1 &
-      echo $! > "$PIDFILE" || true
-    fi
+    echo "Starting $DESC..."
+    start-stop-daemon --start --background --make-pidfile --pidfile $PIDFILE --exec $DAEMON -- -d
     ;;
   stop)
-    if [ -f "$PIDFILE" ]; then
-      kill -TERM "$(cat "$PIDFILE")" 2>/dev/null || true
-      rm -f "$PIDFILE"
-    else
-      pkill -f $(basename $DAEMON) || true
-    fi
+    echo "Stopping $DESC..."
+    start-stop-daemon --stop --pidfile $PIDFILE --retry=TERM/30/KILL/5
+    rm -f $PIDFILE
     ;;
   restart)
     $0 stop
@@ -35,10 +29,18 @@ case "$1" in
     $0 start
     ;;
   status)
-    if pidof $(basename $DAEMON) >/dev/null 2>&1; then
-      echo "aesdsocket running"; exit 0
+    if [ -f $PIDFILE ]; then
+      PID=$(cat $PIDFILE)
+      if kill -0 $PID 2>/dev/null; then
+        echo "$DESC is running (pid $PID)"
+        exit 0
+      else
+        echo "$DESC pidfile exists but process is not running"
+        exit 1
+      fi
     else
-      echo "aesdsocket not running"; exit 1
+      echo "$DESC is not running"
+      exit 3
     fi
     ;;
   *)
@@ -46,3 +48,6 @@ case "$1" in
     exit 2
     ;;
 esac
+
+exit 0
+
