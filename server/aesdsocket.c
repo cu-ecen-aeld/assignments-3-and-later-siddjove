@@ -30,6 +30,7 @@ static int setup_signals(void)
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = signal_handler;
+    sa.sa_flags = 0;
 
     if (sigaction(SIGINT, &sa, NULL) == -1) {
         return -1;
@@ -48,11 +49,11 @@ static int daemonize(void)
         return -1;
     }
     if (pid > 0) {
-        // parent exits
+        /* parent exits */
         exit(EXIT_SUCCESS);
     }
 
-    // child becomes session leader
+    /* child becomes session leader */
     if (setsid() == -1) {
         return -1;
     }
@@ -71,15 +72,15 @@ static int daemonize(void)
 
     umask(0);
 
-    // close standard fds
+    /* close standard fds */
     close(STDIN_FILENO);
     close(STDOUT_FILENO);
     close(STDERR_FILENO);
 
-    // redirect to /dev/null
-    open("/dev/null", O_RDONLY); // stdin
-    open("/dev/null", O_WRONLY); // stdout
-    open("/dev/null", O_WRONLY); // stderr
+    /* redirect to /dev/null */
+    open("/dev/null", O_RDONLY); /* stdin */
+    open("/dev/null", O_WRONLY); /* stdout */
+    open("/dev/null", O_WRONLY); /* stderr */
 
     return 0;
 }
@@ -96,7 +97,7 @@ int main(int argc, char *argv[])
 
     openlog("aesdsocket", LOG_PID, LOG_USER);
 
-    // argument parsing
+    /* argument parsing */
     if (argc == 2 && strcmp(argv[1], "-d") == 0) {
         run_as_daemon = true;
     } else if (argc > 1) {
@@ -112,7 +113,7 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    // create socket
+    /* create socket */
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd == -1) {
         syslog(LOG_ERR, "socket failed: %s", strerror(errno));
@@ -120,7 +121,7 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    // allow address reuse
+    /* allow address reuse */
     if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval)) == -1) {
         syslog(LOG_ERR, "setsockopt failed: %s", strerror(errno));
         close(sockfd);
@@ -146,8 +147,10 @@ int main(int argc, char *argv[])
         closelog();
         return EXIT_FAILURE;
     }
+    syslog(LOG_INFO, "aesdsocket: listening on port %d", PORT);
 
-    // daemon mode (after successful bind/listen)
+
+    /* daemon mode (after successful bind/listen) */
     if (run_as_daemon) {
         if (daemonize() == -1) {
             syslog(LOG_ERR, "daemonize failed: %s", strerror(errno));
@@ -157,13 +160,13 @@ int main(int argc, char *argv[])
         }
     }
 
-    // main accept loop
+    /* main accept loop */
     while (!exit_requested) {
         client_addr_len = sizeof(client_addr);
         clientfd = accept(sockfd, (struct sockaddr *)&client_addr, &client_addr_len);
         if (clientfd == -1) {
             if (errno == EINTR && exit_requested) {
-                // interrupted by signal while waiting on accept
+                /* interrupted by signal while waiting on accept */
                 break;
             }
             syslog(LOG_ERR, "accept failed: %s", strerror(errno));
@@ -178,84 +181,76 @@ int main(int argc, char *argv[])
 
         syslog(LOG_INFO, "Accepted connection from %s", client_ip);
 
-        // receive until newline OR client closes (no-newline packets)
+        /* receive data, write each received chunk immediately to the data file.
+           Stop reading when a newline is seen in the chunk or when client closes. */
         char recv_buf[1024];
-        char *packet = NULL;
-        size_t packet_size = 0;
-        bool packet_complete = false;
+        bool saw_data = false;
+        bool newline_found = false;
 
-        while (!packet_complete && !exit_requested) {
+        while (!exit_requested) {
             ssize_t bytes = recv(clientfd, recv_buf, sizeof(recv_buf), 0);
             if (bytes < 0) {
                 if (errno == EINTR && exit_requested) {
+                    /* interrupted by signal while shutting down */
                     break;
                 }
                 syslog(LOG_ERR, "recv failed: %s", strerror(errno));
                 break;
             } else if (bytes == 0) {
-                // client closed
+                /* client closed connection */
                 break;
             }
 
-            char *new_packet = realloc(packet, packet_size + (size_t)bytes);
-            if (!new_packet) {
-                syslog(LOG_ERR, "realloc failed");
-                free(packet);
-                packet = NULL;
-                break;
-            }
-
-            packet = new_packet;
-            memcpy(packet + packet_size, recv_buf, (size_t)bytes);
-            packet_size += (size_t)bytes;
-
-            // check for newline anywhere in the accumulated packet
-            for (size_t i = 0; i < packet_size; i++) {
-                if (packet[i] == '\n') {
-                    packet_complete = true;
-                    break;
-                }
-            }
-        }
-
-        // Handle both:
-        //  - "normal" packets ending in '\n'
-        //  - last packet where client closed without newline (packet_size > 0)
-        if (packet && (packet_complete || packet_size > 0)) {
-            // append packet to data file
+            /* append this chunk to the data file */
             int data_fd = open(DATA_FILE, O_WRONLY | O_CREAT | O_APPEND, 0644);
             if (data_fd == -1) {
                 syslog(LOG_ERR, "open data file failed: %s", strerror(errno));
-            } else {
-                ssize_t written = write(data_fd, packet, packet_size);
-                if (written == -1) {
-                    syslog(LOG_ERR, "write data file failed: %s", strerror(errno));
-                }
+                break;
+            }
+            ssize_t written = write(data_fd, recv_buf, (size_t)bytes);
+            if (written == -1) {
+                syslog(LOG_ERR, "write data file failed: %s", strerror(errno));
                 close(data_fd);
+                break;
+            }
+            close(data_fd);
+
+            saw_data = true;
+
+            /* check this chunk for newline */
+            for (ssize_t i = 0; i < bytes; i++) {
+                if (recv_buf[i] == '\n') {
+                    newline_found = true;
+                    break;
+                }
             }
 
-            // send entire file back to client
+            if (newline_found) {
+                /* stop reading further from this client after newline */
+                break;
+            }
+        }
+
+        /* if we received any data (newline or no-newline), send the entire file back */
+        if (saw_data) {
             int read_fd = open(DATA_FILE, O_RDONLY);
             if (read_fd == -1) {
                 syslog(LOG_ERR, "open data file for read failed: %s", strerror(errno));
             } else {
-                ssize_t bytes;
-                while ((bytes = read(read_fd, recv_buf, sizeof(recv_buf))) > 0) {
-                    ssize_t sent = send(clientfd, recv_buf, (size_t)bytes, 0);
+                ssize_t rbytes;
+                while ((rbytes = read(read_fd, recv_buf, sizeof(recv_buf))) > 0) {
+                    ssize_t sent = send(clientfd, recv_buf, (size_t)rbytes, 0);
                     if (sent == -1) {
                         syslog(LOG_ERR, "send failed: %s", strerror(errno));
                         break;
                     }
                 }
-                if (bytes == -1) {
+                if (rbytes == -1) {
                     syslog(LOG_ERR, "read data file failed: %s", strerror(errno));
                 }
                 close(read_fd);
             }
         }
-
-        free(packet);
-        packet = NULL;
 
         close(clientfd);
         clientfd = -1;
@@ -269,7 +264,7 @@ int main(int argc, char *argv[])
         close(sockfd);
     }
 
-    // delete data file
+    /* delete data file */
     if (remove(DATA_FILE) == -1 && errno != ENOENT) {
         syslog(LOG_ERR, "Failed to remove data file: %s", strerror(errno));
     }
