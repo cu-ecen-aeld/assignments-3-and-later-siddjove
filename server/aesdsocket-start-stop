@@ -1,52 +1,22 @@
 #!/bin/sh
-### BEGIN INIT INFO
-# Provides:          aesdsocket
-# Required-Start:    $remote_fs $syslog
-# Required-Stop:     $remote_fs $syslog
-# Default-Start:     2 3 4 5
-# Default-Stop:      0 1 6
-# Short-Description: Start aesdsocket daemon
-### END INIT INFO
-
-DAEMON=/usr/bin/aesdsocket
-NAME=aesdsocket
-PIDFILE=/var/run/${NAME}.pid
-DESC="AESD socket daemon"
 
 case "$1" in
-  start)
-    echo "Starting $DESC..."
-    start-stop-daemon --start --background --make-pidfile --pidfile $PIDFILE --exec $DAEMON -- -d
-    ;;
-  stop)
-    echo "Stopping $DESC..."
-    start-stop-daemon --stop --pidfile $PIDFILE --retry=TERM/30/KILL/5
-    rm -f $PIDFILE
-    ;;
-  restart)
-    $0 stop
-    sleep 1
-    $0 start
-    ;;
-  status)
-    if [ -f $PIDFILE ]; then
-      PID=$(cat $PIDFILE)
-      if kill -0 $PID 2>/dev/null; then
-        echo "$DESC is running (pid $PID)"
-        exit 0
-      else
-        echo "$DESC pidfile exists but process is not running"
-        exit 1
-      fi
-    else
-      echo "$DESC is not running"
-      exit 3
-    fi
-    ;;
-  *)
-    echo "Usage: $0 {start|stop|restart|status}"
-    exit 2
-    ;;
+	start)
+		echo "Starting aesdsocket"
+		start-stop-daemon -S -n aesdsocket -a /usr/bin/aesdsocket -- -d
+		;;
+	stop)
+		echo "Stopping aesdsocket"
+		start-stop-daemon -K -n aesdsocket
+		;;
+	restart)
+		$0 stop
+		$0 start
+		;;
+	*)
+		echo "Usage: $0 {start|stop|restart}"
+		exit 1
+		;;
 esac
 
 exit 0
