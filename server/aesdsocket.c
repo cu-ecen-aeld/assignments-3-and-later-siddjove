@@ -25,40 +25,30 @@ static void signal_handler(int signo)
     exit_requested = 1;
 }
 
-static int setup_signals(void)
+static void setup_signals(void)
 {
     struct sigaction sa = {0};
     sa.sa_handler = signal_handler;
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
-    return 0;
-}
 
-static int daemonize(void)
-{
-    if (fork() > 0) exit(EXIT_SUCCESS);
-    setsid();
-    if (fork() > 0) exit(EXIT_SUCCESS);
-    chdir("/");
-    umask(0);
-    close(STDIN_FILENO);
-    close(STDOUT_FILENO);
-    close(STDERR_FILENO);
-    open("/dev/null", O_RDONLY);
-    open("/dev/null", O_WRONLY);
-    open("/dev/null", O_WRONLY);
-    return 0;
+    /* 🔴 CRITICAL FIX: prevent send() from killing process */
+    signal(SIGPIPE, SIG_IGN);
 }
 
 int main(int argc, char *argv[])
 {
-    int sockfd;
     bool daemon = (argc == 2 && strcmp(argv[1], "-d") == 0);
 
     openlog("aesdsocket", LOG_PID, LOG_USER);
     setup_signals();
 
-    sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd < 0) {
+        syslog(LOG_ERR, "socket failed");
+        return EXIT_FAILURE;
+    }
+
     int opt = 1;
     setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
@@ -67,43 +57,69 @@ int main(int argc, char *argv[])
     addr.sin_port = htons(PORT);
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
 
-    bind(sockfd, (struct sockaddr *)&addr, sizeof(addr));
-    listen(sockfd, BACKLOG);
+    if (bind(sockfd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        syslog(LOG_ERR, "bind failed");
+        close(sockfd);
+        return EXIT_FAILURE;
+    }
 
-    if (daemon) daemonize();
+    if (listen(sockfd, BACKLOG) < 0) {
+        syslog(LOG_ERR, "listen failed");
+        close(sockfd);
+        return EXIT_FAILURE;
+    }
+
+    if (daemon && fork() > 0)
+        exit(EXIT_SUCCESS);
 
     while (!exit_requested) {
         int clientfd = accept(sockfd, NULL, NULL);
-        if (clientfd < 0) continue;
+        if (clientfd < 0)
+            continue;
 
-        char recvbuf[1024];
+        char buf[1024];
         char *packet = NULL;
         size_t packet_len = 0;
-        bool done = false;
 
-        while (!done) {
-            ssize_t r = recv(clientfd, recvbuf, sizeof(recvbuf), 0);
-            if (r <= 0) break;
+        /* Receive until newline OR EOF */
+        while (1) {
+            ssize_t r = recv(clientfd, buf, sizeof(buf), 0);
+            if (r <= 0)
+                break;
 
-            packet = realloc(packet, packet_len + r);
-            memcpy(packet + packet_len, recvbuf, r);
+            char *tmp = realloc(packet, packet_len + r);
+            if (!tmp) {
+                free(packet);
+                packet = NULL;
+                packet_len = 0;
+                break;
+            }
+            packet = tmp;
+
+            memcpy(packet + packet_len, buf, r);
             packet_len += r;
 
-            if (memchr(recvbuf, '\n', r))
-                done = true;
+            if (memchr(buf, '\n', r))
+                break;
         }
 
+        /* Write and respond if we received anything */
         if (packet_len > 0) {
             int fd = open(DATA_FILE, O_WRONLY | O_CREAT | O_APPEND, 0644);
-            write(fd, packet, packet_len);
-            fsync(fd);
-            close(fd);
+            if (fd >= 0) {
+                write(fd, packet, packet_len);
+                fsync(fd);
+                close(fd);
+            }
 
             fd = open(DATA_FILE, O_RDONLY);
-            while ((packet_len = read(fd, recvbuf, sizeof(recvbuf))) > 0) {
-                send(clientfd, recvbuf, packet_len, 0);
+            if (fd >= 0) {
+                ssize_t r;
+                while ((r = read(fd, buf, sizeof(buf))) > 0) {
+                    send(clientfd, buf, r, 0);
+                }
+                close(fd);
             }
-            close(fd);
         }
 
         free(packet);
@@ -113,6 +129,6 @@ int main(int argc, char *argv[])
     close(sockfd);
     remove(DATA_FILE);
     closelog();
-    return 0;
+    return EXIT_SUCCESS;
 }
 
