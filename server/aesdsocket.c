@@ -71,6 +71,9 @@ int main(int argc, char *argv[])
 
     if (daemon && fork() > 0)
         exit(EXIT_SUCCESS);
+        
+        /* 🔴 REQUIRED: clear old data on startup */
+           remove(DATA_FILE);
 
     while (!exit_requested) {
         int clientfd = accept(sockfd, NULL, NULL);
