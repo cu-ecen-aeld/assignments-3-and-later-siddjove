@@ -31,7 +31,6 @@ static void setup_signals(void)
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
 
-    /* REQUIRED */
     signal(SIGPIPE, SIG_IGN);
 }
 
@@ -57,7 +56,6 @@ int main(int argc, char *argv[])
     if (daemon && fork() > 0)
         exit(EXIT_SUCCESS);
 
-    /* Clear once per daemon start */
     unlink(DATA_FILE);
 
     while (!exit_requested) {
@@ -92,21 +90,32 @@ int main(int argc, char *argv[])
 
         if (packet_len > 0) {
             int fd = open(DATA_FILE, O_WRONLY | O_CREAT | O_APPEND, 0644);
-            write(fd, packet, packet_len);
+            if (fd < 0) {
+                syslog(LOG_ERR, "open failed: %s", strerror(errno));
+                goto cleanup;
+            }
 
-            /* 🔥 THIS WAS THE MISSING PIECE */
+            ssize_t w = write(fd, packet, packet_len);
+            if (w < 0) {
+                syslog(LOG_ERR, "write failed: %s", strerror(errno));
+                close(fd);
+                goto cleanup;
+            }
+
             fsync(fd);
-
             close(fd);
 
             fd = open(DATA_FILE, O_RDONLY);
-            while ((packet_len = read(fd, buf, sizeof(buf))) > 0)
-                send(clientfd, buf, packet_len, 0);
-            close(fd);
+            if (fd >= 0) {
+                while ((packet_len = read(fd, buf, sizeof(buf))) > 0)
+                    send(clientfd, buf, packet_len, 0);
+                close(fd);
+            }
 
             shutdown(clientfd, SHUT_WR);
         }
 
+cleanup:
         free(packet);
         close(clientfd);
     }
