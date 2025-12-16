@@ -1,8 +1,8 @@
-CC ?= $(CROSS_COMPILE)gcc
-CFLAGS ?= -Wall -Wextra -O2
-
 TARGET = aesdsocket
 SRC = aesdsocket.c
+
+CC ?= $(CROSS_COMPILE)gcc
+CFLAGS ?= -Wall -Wextra -O2
 
 .PHONY: all clean
 
