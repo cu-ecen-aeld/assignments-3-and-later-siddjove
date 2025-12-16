@@ -40,6 +40,11 @@ int main(int argc, char *argv[])
     setup_signals();
 
     int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd < 0) {
+        syslog(LOG_ERR, "socket failed");
+        return EXIT_FAILURE;
+    }
+
     int opt = 1;
     setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
@@ -48,19 +53,31 @@ int main(int argc, char *argv[])
     addr.sin_port = htons(PORT);
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
 
-    bind(sockfd, (struct sockaddr *)&addr, sizeof(addr));
-    listen(sockfd, BACKLOG);
+    if (bind(sockfd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        syslog(LOG_ERR, "bind failed");
+        close(sockfd);
+        return EXIT_FAILURE;
+    }
+
+    if (listen(sockfd, BACKLOG) < 0) {
+        syslog(LOG_ERR, "listen failed");
+        close(sockfd);
+        return EXIT_FAILURE;
+    }
 
     if (daemon && fork() > 0)
         exit(EXIT_SUCCESS);
 
-    /* 🔥 CRITICAL FIX */
+    /* ✅ Startup cleanup */
     unlink(DATA_FILE);
 
     while (!exit_requested) {
         int clientfd = accept(sockfd, NULL, NULL);
-        if (clientfd < 0)
-            continue;
+        if (clientfd < 0) {
+            if (errno == EINTR)
+                continue;
+            break;
+        }
 
         char buf[1024];
         char *packet = NULL;
@@ -71,7 +88,14 @@ int main(int argc, char *argv[])
             if (r <= 0)
                 break;
 
-            packet = realloc(packet, packet_len + r);
+            char *tmp = realloc(packet, packet_len + r);
+            if (!tmp) {
+                free(packet);
+                packet = NULL;
+                break;
+            }
+            packet = tmp;
+
             memcpy(packet + packet_len, buf, r);
             packet_len += r;
 
@@ -79,23 +103,34 @@ int main(int argc, char *argv[])
                 break;
         }
 
-        if (packet_len > 0) {
+        if (packet && packet_len > 0) {
             int fd = open(DATA_FILE, O_WRONLY | O_CREAT | O_APPEND, 0644);
-            write(fd, packet, packet_len);
-            close(fd);
+            if (fd >= 0) {
+                write(fd, packet, packet_len);
+                close(fd);
+            }
 
             fd = open(DATA_FILE, O_RDONLY);
-            while ((packet_len = read(fd, buf, sizeof(buf))) > 0)
-                send(clientfd, buf, packet_len, 0);
-            close(fd);
+            if (fd >= 0) {
+                ssize_t n;
+                while ((n = read(fd, buf, sizeof(buf))) > 0) {
+                    send(clientfd, buf, n, 0);
+                }
+                close(fd);
+            }
         }
 
         free(packet);
         close(clientfd);
     }
 
-    close(sockfd);
+    if (sockfd >= 0)
+        close(sockfd);
+
+    /* ✅ Shutdown cleanup (THIS WAS MISSING) */
+    unlink(DATA_FILE);
+
     closelog();
-    return 0;
+    return EXIT_SUCCESS;
 }
 
