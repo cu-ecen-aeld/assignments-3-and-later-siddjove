@@ -31,10 +31,9 @@ static void setup_signals(void)
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
 
-    /* REQUIRED: prevent termination on send() */
+    /* REQUIRED */
     signal(SIGPIPE, SIG_IGN);
 }
-
 
 int main(int argc, char *argv[])
 {
@@ -58,7 +57,7 @@ int main(int argc, char *argv[])
     if (daemon && fork() > 0)
         exit(EXIT_SUCCESS);
 
-    /* Clear file once per daemon start */
+    /* REQUIRED */
     unlink(DATA_FILE);
 
     while (!exit_requested) {
@@ -91,19 +90,18 @@ int main(int argc, char *argv[])
                 break;
         }
 
-        /* ✅ WRITE IF ANY DATA WAS RECEIVED */
         if (packet_len > 0) {
             int fd = open(DATA_FILE, O_WRONLY | O_CREAT | O_APPEND, 0644);
             write(fd, packet, packet_len);
             close(fd);
-fd = open(DATA_FILE, O_RDONLY);
-while ((packet_len = read(fd, buf, sizeof(buf))) > 0)
-    send(clientfd, buf, packet_len, 0);
-close(fd);
 
-/* REQUIRED: ensure data is flushed to peer */
-shutdown(clientfd, SHUT_WR);
+            fd = open(DATA_FILE, O_RDONLY);
+            while ((packet_len = read(fd, buf, sizeof(buf))) > 0)
+                send(clientfd, buf, packet_len, 0);
+            close(fd);
 
+            /* 🔥 THIS WAS MISSING */
+            shutdown(clientfd, SHUT_WR);
         }
 
         free(packet);
