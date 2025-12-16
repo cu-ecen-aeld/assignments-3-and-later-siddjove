@@ -42,7 +42,7 @@ int main(int argc, char *argv[])
     int sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd < 0) {
         syslog(LOG_ERR, "socket failed");
-        return EXIT_FAILURE;
+        exit(EXIT_FAILURE);
     }
 
     int opt = 1;
@@ -55,20 +55,19 @@ int main(int argc, char *argv[])
 
     if (bind(sockfd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         syslog(LOG_ERR, "bind failed");
-        close(sockfd);
-        return EXIT_FAILURE;
+        exit(EXIT_FAILURE);
     }
 
     if (listen(sockfd, BACKLOG) < 0) {
         syslog(LOG_ERR, "listen failed");
-        close(sockfd);
-        return EXIT_FAILURE;
+        exit(EXIT_FAILURE);
     }
 
+    /* ---- DAEMONIZE FIRST ---- */
     if (daemon && fork() > 0)
         exit(EXIT_SUCCESS);
 
-    /* ✅ Startup cleanup */
+    /* ---- CRITICAL: clear data file ONCE at startup ---- */
     unlink(DATA_FILE);
 
     while (!exit_requested) {
@@ -92,6 +91,7 @@ int main(int argc, char *argv[])
             if (!tmp) {
                 free(packet);
                 packet = NULL;
+                packet_len = 0;
                 break;
             }
             packet = tmp;
@@ -112,9 +112,9 @@ int main(int argc, char *argv[])
 
             fd = open(DATA_FILE, O_RDONLY);
             if (fd >= 0) {
-                ssize_t n;
-                while ((n = read(fd, buf, sizeof(buf))) > 0) {
-                    send(clientfd, buf, n, 0);
+                ssize_t r;
+                while ((r = read(fd, buf, sizeof(buf))) > 0) {
+                    send(clientfd, buf, r, 0);
                 }
                 close(fd);
             }
@@ -124,13 +124,8 @@ int main(int argc, char *argv[])
         close(clientfd);
     }
 
-    if (sockfd >= 0)
-        close(sockfd);
-
-    /* ✅ Shutdown cleanup (THIS WAS MISSING) */
-    unlink(DATA_FILE);
-
+    close(sockfd);
     closelog();
-    return EXIT_SUCCESS;
+    return 0;
 }
 
