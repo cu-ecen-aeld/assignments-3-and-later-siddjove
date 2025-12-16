@@ -27,141 +27,92 @@ static void signal_handler(int signo)
 
 static int setup_signals(void)
 {
-    struct sigaction sa;
-    memset(&sa, 0, sizeof(sa));
+    struct sigaction sa = {0};
     sa.sa_handler = signal_handler;
-
-    if (sigaction(SIGINT, &sa, NULL) == -1) return -1;
-    if (sigaction(SIGTERM, &sa, NULL) == -1) return -1;
-
+    sigaction(SIGINT, &sa, NULL);
+    sigaction(SIGTERM, &sa, NULL);
     return 0;
 }
 
 static int daemonize(void)
 {
-    pid_t pid = fork();
-    if (pid < 0) return -1;
-    if (pid > 0) exit(EXIT_SUCCESS);
-
-    if (setsid() == -1) return -1;
-
-    pid = fork();
-    if (pid < 0) return -1;
-    if (pid > 0) exit(EXIT_SUCCESS);
-
+    if (fork() > 0) exit(EXIT_SUCCESS);
+    setsid();
+    if (fork() > 0) exit(EXIT_SUCCESS);
     chdir("/");
     umask(0);
-
     close(STDIN_FILENO);
     close(STDOUT_FILENO);
     close(STDERR_FILENO);
-
     open("/dev/null", O_RDONLY);
     open("/dev/null", O_WRONLY);
     open("/dev/null", O_WRONLY);
-
     return 0;
 }
 
 int main(int argc, char *argv[])
 {
     int sockfd;
-    bool run_as_daemon = false;
+    bool daemon = (argc == 2 && strcmp(argv[1], "-d") == 0);
 
     openlog("aesdsocket", LOG_PID, LOG_USER);
-
-    if (argc == 2 && strcmp(argv[1], "-d") == 0) {
-        run_as_daemon = true;
-    } else if (argc > 1) {
-        syslog(LOG_ERR, "Invalid arguments");
-        return EXIT_FAILURE;
-    }
-
-    if (setup_signals() == -1) {
-        syslog(LOG_ERR, "signal setup failed");
-        return EXIT_FAILURE;
-    }
+    setup_signals();
 
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
-    if (sockfd == -1) {
-        syslog(LOG_ERR, "socket failed");
-        return EXIT_FAILURE;
-    }
-
     int opt = 1;
     setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
-    struct sockaddr_in server_addr = {0};
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(PORT);
-    server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    struct sockaddr_in addr = {0};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(PORT);
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
 
-    if (bind(sockfd, (struct sockaddr *)&server_addr, sizeof(server_addr)) == -1) {
-        syslog(LOG_ERR, "bind failed");
-        return EXIT_FAILURE;
-    }
+    bind(sockfd, (struct sockaddr *)&addr, sizeof(addr));
+    listen(sockfd, BACKLOG);
 
-    if (listen(sockfd, BACKLOG) == -1) {
-        syslog(LOG_ERR, "listen failed");
-        return EXIT_FAILURE;
-    }
-
-    if (run_as_daemon && daemonize() == -1) {
-        syslog(LOG_ERR, "daemonize failed");
-        return EXIT_FAILURE;
-    }
+    if (daemon) daemonize();
 
     while (!exit_requested) {
-        struct sockaddr_in client_addr;
-        socklen_t addrlen = sizeof(client_addr);
-        int clientfd = accept(sockfd, (struct sockaddr *)&client_addr, &addrlen);
-        if (clientfd == -1) {
-            if (errno == EINTR) break;
-            continue;
-        }
+        int clientfd = accept(sockfd, NULL, NULL);
+        if (clientfd < 0) continue;
 
-        syslog(LOG_INFO, "Accepted connection");
-
-        int data_fd = open(DATA_FILE, O_WRONLY | O_CREAT | O_APPEND, 0644);
-        if (data_fd == -1) {
-            close(clientfd);
-            continue;
-        }
-
-        char buffer[1024];
+        char recvbuf[1024];
+        char *packet = NULL;
+        size_t packet_len = 0;
         bool done = false;
 
         while (!done) {
-            ssize_t bytes = recv(clientfd, buffer, sizeof(buffer), 0);
-            if (bytes <= 0) {
-                break;   // EOF OR error → process data
-            }
+            ssize_t r = recv(clientfd, recvbuf, sizeof(recvbuf), 0);
+            if (r <= 0) break;
 
-            write(data_fd, buffer, bytes);
+            packet = realloc(packet, packet_len + r);
+            memcpy(packet + packet_len, recvbuf, r);
+            packet_len += r;
 
-            if (memchr(buffer, '\n', bytes)) {
+            if (memchr(recvbuf, '\n', r))
                 done = true;
-            }
         }
 
-        close(data_fd);
+        if (packet_len > 0) {
+            int fd = open(DATA_FILE, O_WRONLY | O_CREAT | O_APPEND, 0644);
+            write(fd, packet, packet_len);
+            fsync(fd);
+            close(fd);
 
-        data_fd = open(DATA_FILE, O_RDONLY);
-        if (data_fd != -1) {
-            ssize_t rbytes;
-            while ((rbytes = read(data_fd, buffer, sizeof(buffer))) > 0) {
-                send(clientfd, buffer, rbytes, 0);
+            fd = open(DATA_FILE, O_RDONLY);
+            while ((packet_len = read(fd, recvbuf, sizeof(recvbuf))) > 0) {
+                send(clientfd, recvbuf, packet_len, 0);
             }
-            close(data_fd);
+            close(fd);
         }
 
+        free(packet);
         close(clientfd);
-        syslog(LOG_INFO, "Closed connection");
     }
 
     close(sockfd);
     remove(DATA_FILE);
     closelog();
-    return EXIT_SUCCESS;
+    return 0;
 }
 
