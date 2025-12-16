@@ -57,7 +57,7 @@ int main(int argc, char *argv[])
     if (daemon && fork() > 0)
         exit(EXIT_SUCCESS);
 
-    /* REQUIRED */
+    /* Clear once per daemon start */
     unlink(DATA_FILE);
 
     while (!exit_requested) {
@@ -93,6 +93,10 @@ int main(int argc, char *argv[])
         if (packet_len > 0) {
             int fd = open(DATA_FILE, O_WRONLY | O_CREAT | O_APPEND, 0644);
             write(fd, packet, packet_len);
+
+            /* 🔥 THIS WAS THE MISSING PIECE */
+            fsync(fd);
+
             close(fd);
 
             fd = open(DATA_FILE, O_RDONLY);
@@ -100,7 +104,6 @@ int main(int argc, char *argv[])
                 send(clientfd, buf, packet_len, 0);
             close(fd);
 
-            /* 🔥 THIS WAS MISSING */
             shutdown(clientfd, SHUT_WR);
         }
 
