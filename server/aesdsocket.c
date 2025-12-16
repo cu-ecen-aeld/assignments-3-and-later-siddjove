@@ -30,7 +30,11 @@ static void setup_signals(void)
     sa.sa_handler = signal_handler;
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
+
+    /* REQUIRED: prevent termination on send() */
+    signal(SIGPIPE, SIG_IGN);
 }
+
 
 int main(int argc, char *argv[])
 {
