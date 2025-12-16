@@ -96,11 +96,14 @@ int main(int argc, char *argv[])
             int fd = open(DATA_FILE, O_WRONLY | O_CREAT | O_APPEND, 0644);
             write(fd, packet, packet_len);
             close(fd);
+fd = open(DATA_FILE, O_RDONLY);
+while ((packet_len = read(fd, buf, sizeof(buf))) > 0)
+    send(clientfd, buf, packet_len, 0);
+close(fd);
 
-            fd = open(DATA_FILE, O_RDONLY);
-            while ((packet_len = read(fd, buf, sizeof(buf))) > 0)
-                send(clientfd, buf, packet_len, 0);
-            close(fd);
+/* REQUIRED: ensure data is flushed to peer */
+shutdown(clientfd, SHUT_WR);
+
         }
 
         free(packet);
