@@ -54,7 +54,7 @@ int main(int argc, char *argv[])
     if (daemon && fork() > 0)
         exit(EXIT_SUCCESS);
 
-    /* REQUIRED: clear old data on startup */
+    /* Clear file once per daemon start */
     unlink(DATA_FILE);
 
     while (!exit_requested) {
@@ -68,8 +68,6 @@ int main(int argc, char *argv[])
 
         while (1) {
             ssize_t r = recv(clientfd, buf, sizeof(buf), 0);
-
-            /* EOF or error ends message */
             if (r <= 0)
                 break;
 
@@ -85,11 +83,11 @@ int main(int argc, char *argv[])
             memcpy(packet + packet_len, buf, r);
             packet_len += r;
 
-            /* newline also ends message */
             if (memchr(buf, '\n', r))
                 break;
         }
 
+        /* ✅ WRITE IF ANY DATA WAS RECEIVED */
         if (packet_len > 0) {
             int fd = open(DATA_FILE, O_WRONLY | O_CREAT | O_APPEND, 0644);
             write(fd, packet, packet_len);
