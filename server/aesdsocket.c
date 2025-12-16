@@ -54,8 +54,7 @@ int main(int argc, char *argv[])
     if (daemon && fork() > 0)
         exit(EXIT_SUCCESS);
 
-    /* MUST clear file once at startup */
-    unlink(DATA_FILE);
+    unlink(DATA_FILE);  // clear file on startup
 
     while (!exit_requested) {
         int clientfd = accept(sockfd, NULL, NULL);
@@ -65,31 +64,24 @@ int main(int argc, char *argv[])
         char buf[1024];
         char *packet = NULL;
         size_t packet_len = 0;
-        bool done = false;
+        bool newline_found = false;
 
-        while (!done) {
+        while (1) {
             ssize_t r = recv(clientfd, buf, sizeof(buf), 0);
-
-            if (r < 0) {
-                if (errno == EINTR)
-                    continue;
+            if (r <= 0)
                 break;
-            }
-
-            if (r == 0) {
-                /* EOF = end of packet */
-                break;
-            }
 
             packet = realloc(packet, packet_len + r);
             memcpy(packet + packet_len, buf, r);
             packet_len += r;
 
-            if (memchr(buf, '\n', r))
-                done = true;
+            if (memchr(buf, '\n', r)) {
+                newline_found = true;
+                break;
+            }
         }
 
-        if (packet_len > 0) {
+        if (newline_found) {
             int fd = open(DATA_FILE, O_WRONLY | O_CREAT | O_APPEND, 0644);
             write(fd, packet, packet_len);
             close(fd);
@@ -105,6 +97,7 @@ int main(int argc, char *argv[])
     }
 
     close(sockfd);
+    unlink(DATA_FILE);
     closelog();
     return 0;
 }
