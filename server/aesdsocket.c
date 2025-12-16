@@ -40,11 +40,6 @@ int main(int argc, char *argv[])
     setup_signals();
 
     int sockfd = socket(AF_INET, SOCK_STREAM, 0);
-    if (sockfd < 0) {
-        syslog(LOG_ERR, "socket failed");
-        exit(EXIT_FAILURE);
-    }
-
     int opt = 1;
     setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
@@ -53,71 +48,56 @@ int main(int argc, char *argv[])
     addr.sin_port = htons(PORT);
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
 
-    if (bind(sockfd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        syslog(LOG_ERR, "bind failed");
-        exit(EXIT_FAILURE);
-    }
+    bind(sockfd, (struct sockaddr *)&addr, sizeof(addr));
+    listen(sockfd, BACKLOG);
 
-    if (listen(sockfd, BACKLOG) < 0) {
-        syslog(LOG_ERR, "listen failed");
-        exit(EXIT_FAILURE);
-    }
-
-    /* ---- DAEMONIZE FIRST ---- */
     if (daemon && fork() > 0)
         exit(EXIT_SUCCESS);
 
-    /* ---- CRITICAL: clear data file ONCE at startup ---- */
+    /* MUST clear file once at startup */
     unlink(DATA_FILE);
 
     while (!exit_requested) {
         int clientfd = accept(sockfd, NULL, NULL);
-        if (clientfd < 0) {
-            if (errno == EINTR)
-                continue;
-            break;
-        }
+        if (clientfd < 0)
+            continue;
 
         char buf[1024];
         char *packet = NULL;
         size_t packet_len = 0;
+        bool done = false;
 
-        while (1) {
+        while (!done) {
             ssize_t r = recv(clientfd, buf, sizeof(buf), 0);
-            if (r <= 0)
-                break;
 
-            char *tmp = realloc(packet, packet_len + r);
-            if (!tmp) {
-                free(packet);
-                packet = NULL;
-                packet_len = 0;
+            if (r < 0) {
+                if (errno == EINTR)
+                    continue;
                 break;
             }
-            packet = tmp;
 
+            if (r == 0) {
+                /* EOF = end of packet */
+                break;
+            }
+
+            packet = realloc(packet, packet_len + r);
             memcpy(packet + packet_len, buf, r);
             packet_len += r;
 
             if (memchr(buf, '\n', r))
-                break;
+                done = true;
         }
 
-        if (packet && packet_len > 0) {
+        if (packet_len > 0) {
             int fd = open(DATA_FILE, O_WRONLY | O_CREAT | O_APPEND, 0644);
-            if (fd >= 0) {
-                write(fd, packet, packet_len);
-                close(fd);
-            }
+            write(fd, packet, packet_len);
+            close(fd);
 
             fd = open(DATA_FILE, O_RDONLY);
-            if (fd >= 0) {
-                ssize_t r;
-                while ((r = read(fd, buf, sizeof(buf))) > 0) {
-                    send(clientfd, buf, r, 0);
-                }
-                close(fd);
-            }
+            while ((packet_len = read(fd, buf, sizeof(buf))) > 0)
+                send(clientfd, buf, packet_len, 0);
+            close(fd);
         }
 
         free(packet);
