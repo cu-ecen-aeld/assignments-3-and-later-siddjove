@@ -69,7 +69,6 @@ int main(int argc, char *argv[])
     setup_signals();
 
     int sockfd = socket(AF_INET, SOCK_STREAM, 0);
-
     int opt = 1;
     setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
@@ -89,29 +88,39 @@ int main(int argc, char *argv[])
         if (clientfd < 0)
             continue;
 
-        /* 🔑 CRITICAL FIX: recv timeout */
+        /* Required for autotest half-close behavior */
         struct timeval tv = {1, 0};
         setsockopt(clientfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
         char buffer[1024];
         char *packet = NULL;
         size_t packet_len = 0;
+        bool got_data = false;
 
         while (1) {
             ssize_t r = recv(clientfd, buffer, sizeof(buffer), 0);
-            if (r <= 0)
-                break;
 
-            char *tmp = realloc(packet, packet_len + r);
-            if (!tmp)
-                break;
+            if (r > 0) {
+                got_data = true;
 
-            packet = tmp;
-            memcpy(packet + packet_len, buffer, r);
-            packet_len += r;
+                char *tmp = realloc(packet, packet_len + r);
+                if (!tmp)
+                    break;
 
-            if (memchr(buffer, '\n', r))
-                break;
+                packet = tmp;
+                memcpy(packet + packet_len, buffer, r);
+                packet_len += r;
+
+                if (memchr(buffer, '\n', r))
+                    break;
+            }
+            else {
+                /* recv == 0 or timeout */
+                if (got_data)
+                    break;
+                else
+                    continue;
+            }
         }
 
         if (packet_len > 0) {
@@ -121,17 +130,13 @@ int main(int argc, char *argv[])
             mkdir("/var/tmp", 0755);
 
             int fd = open(DATA_FILE, O_WRONLY | O_CREAT | O_APPEND, 0644);
-            if (fd >= 0) {
-                write(fd, packet, packet_len);
-                close(fd);
-            }
+            write(fd, packet, packet_len);
+            close(fd);
 
             fd = open(DATA_FILE, O_RDONLY);
-            if (fd >= 0) {
-                while ((packet_len = read(fd, buffer, sizeof(buffer))) > 0)
-                    send(clientfd, buffer, packet_len, 0);
-                close(fd);
-            }
+            while ((packet_len = read(fd, buffer, sizeof(buffer))) > 0)
+                send(clientfd, buffer, packet_len, 0);
+            close(fd);
         }
 
         free(packet);
