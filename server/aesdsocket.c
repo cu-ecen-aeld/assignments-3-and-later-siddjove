@@ -17,27 +17,25 @@
 #define BACKLOG 10
 #define DATA_FILE "/var/tmp/aesdsocketdata"
 
-static volatile sig_atomic_t exit_requested = 0;
+static volatile sig_atomic_t keep_running = 1;
 
-static void signal_handler(int signo)
+static void signal_handler(int sig)
 {
-    (void)signo;
-    exit_requested = 1;
-}
-
-static void setup_signals(void)
-{
-    struct sigaction sa = {0};
-    sa.sa_handler = signal_handler;
-    sigaction(SIGINT, &sa, NULL);
-    sigaction(SIGTERM, &sa, NULL);
+    (void)sig;
+    keep_running = 0;
 }
 
 static void daemonize(void)
 {
-    if (fork() > 0) exit(EXIT_SUCCESS);
+    pid_t pid = fork();
+    if (pid > 0)
+        exit(EXIT_SUCCESS);
+
     setsid();
-    if (fork() > 0) exit(EXIT_SUCCESS);
+
+    pid = fork();
+    if (pid > 0)
+        exit(EXIT_SUCCESS);
 
     chdir("/");
     umask(0);
@@ -51,24 +49,23 @@ static void daemonize(void)
     open("/dev/null", O_WRONLY);
 }
 
-static void strip_cr(char *buf, size_t *len)
-{
-    size_t w = 0;
-    for (size_t r = 0; r < *len; r++) {
-        if (buf[r] != '\r')
-            buf[w++] = buf[r];
-    }
-    *len = w;
-}
-
 int main(int argc, char *argv[])
 {
-    bool daemon = (argc == 2 && strcmp(argv[1], "-d") == 0);
+    bool daemon = false;
+    if (argc == 2 && strcmp(argv[1], "-d") == 0)
+        daemon = true;
 
     openlog("aesdsocket", LOG_PID, LOG_USER);
-    setup_signals();
+
+    struct sigaction sa = {0};
+    sa.sa_handler = signal_handler;
+    sigaction(SIGINT, &sa, NULL);
+    sigaction(SIGTERM, &sa, NULL);
 
     int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd < 0)
+        exit(EXIT_FAILURE);
+
     int opt = 1;
     setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
@@ -77,80 +74,52 @@ int main(int argc, char *argv[])
     addr.sin_port = htons(PORT);
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
 
-    bind(sockfd, (struct sockaddr *)&addr, sizeof(addr));
-    listen(sockfd, BACKLOG);
+    if (bind(sockfd, (struct sockaddr *)&addr, sizeof(addr)) < 0)
+        exit(EXIT_FAILURE);
+
+    if (listen(sockfd, BACKLOG) < 0)
+        exit(EXIT_FAILURE);
 
     if (daemon)
         daemonize();
 
-    while (!exit_requested) {
+    /* Ensure directory exists */
+    mkdir("/var", 0755);
+    mkdir("/var/tmp", 0755);
+
+    while (keep_running) {
         int clientfd = accept(sockfd, NULL, NULL);
         if (clientfd < 0)
             continue;
 
-        /* Required for autotest half-close behavior */
-        struct timeval tv = {1, 0};
-        setsockopt(clientfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-
         char buffer[1024];
-        char *packet = NULL;
-        size_t packet_len = 0;
-        bool got_data = false;
+        ssize_t bytes;
 
-        while (1) {
-            ssize_t r = recv(clientfd, buffer, sizeof(buffer), 0);
-
-            if (r > 0) {
-                got_data = true;
-
-                char *tmp = realloc(packet, packet_len + r);
-                if (!tmp)
-                    break;
-
-                packet = tmp;
-                memcpy(packet + packet_len, buffer, r);
-                packet_len += r;
-
-                if (memchr(buffer, '\n', r))
-                    break;
-            }
-            else {
-                /* recv == 0 or timeout */
-                if (got_data)
-                    break;
-                else
-                    continue;
-            }
+        int fd = open(DATA_FILE, O_WRONLY | O_CREAT | O_APPEND, 0644);
+        if (fd < 0) {
+            close(clientfd);
+            continue;
         }
 
-       if (packet_len > 0) {
-    strip_cr(packet, &packet_len);
-
-    /* REQUIRED: ensure newline termination */
-    if (packet[packet_len - 1] != '\n') {
-        char *tmp = realloc(packet, packet_len + 1);
-        if (tmp) {
-            packet = tmp;
-            packet[packet_len] = '\n';
-            packet_len++;
+        /* === CRITICAL PART ===
+         * Read UNTIL CLIENT CLOSES (recv == 0)
+         * This handles autotest shutdown(SHUT_WR)
+         */
+        while ((bytes = recv(clientfd, buffer, sizeof(buffer), 0)) > 0) {
+            write(fd, buffer, bytes);
         }
-    }
 
+        close(fd);
 
-            mkdir("/var", 0755);
-            mkdir("/var/tmp", 0755);
-
-            int fd = open(DATA_FILE, O_WRONLY | O_CREAT | O_APPEND, 0644);
-            write(fd, packet, packet_len);
-            close(fd);
-
-            fd = open(DATA_FILE, O_RDONLY);
-            while ((packet_len = read(fd, buffer, sizeof(buffer))) > 0)
-                send(clientfd, buffer, packet_len, 0);
+        /* Send entire file back */
+        fd = open(DATA_FILE, O_RDONLY);
+        if (fd >= 0) {
+            while ((bytes = read(fd, buffer, sizeof(buffer))) > 0) {
+                send(clientfd, buffer, bytes, 0);
+            }
             close(fd);
         }
 
-        free(packet);
         close(clientfd);
     }
 
