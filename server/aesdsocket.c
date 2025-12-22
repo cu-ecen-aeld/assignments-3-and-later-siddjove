@@ -61,13 +61,6 @@ static void strip_cr(char *buf, size_t *len)
     *len = w;
 }
 
-/* 🔴 REQUIRED for Buildroot */
-static void ensure_var_tmp_exists(void)
-{
-    mkdir("/var", 0755);
-    mkdir("/var/tmp", 0755);
-}
-
 int main(int argc, char *argv[])
 {
     bool daemon = (argc == 2 && strcmp(argv[1], "-d") == 0);
@@ -96,6 +89,10 @@ int main(int argc, char *argv[])
         if (clientfd < 0)
             continue;
 
+        /* 🔑 CRITICAL FIX: recv timeout */
+        struct timeval tv = {1, 0};
+        setsockopt(clientfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
         char buffer[1024];
         char *packet = NULL;
         size_t packet_len = 0;
@@ -118,15 +115,16 @@ int main(int argc, char *argv[])
         }
 
         if (packet_len > 0) {
-            ensure_var_tmp_exists();
-strip_cr(packet, &packet_len);
+            strip_cr(packet, &packet_len);
 
-int fd = open(DATA_FILE, O_WRONLY | O_CREAT | O_APPEND, 0644);
-if (fd >= 0) {
-    write(fd, packet, packet_len);
-    close(fd);
-}
+            mkdir("/var", 0755);
+            mkdir("/var/tmp", 0755);
 
+            int fd = open(DATA_FILE, O_WRONLY | O_CREAT | O_APPEND, 0644);
+            if (fd >= 0) {
+                write(fd, packet, packet_len);
+                close(fd);
+            }
 
             fd = open(DATA_FILE, O_RDONLY);
             if (fd >= 0) {
