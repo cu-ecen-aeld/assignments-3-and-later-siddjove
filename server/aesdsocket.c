@@ -123,8 +123,19 @@ int main(int argc, char *argv[])
             }
         }
 
-        if (packet_len > 0) {
-            strip_cr(packet, &packet_len);
+       if (packet_len > 0) {
+    strip_cr(packet, &packet_len);
+
+    /* REQUIRED: ensure newline termination */
+    if (packet[packet_len - 1] != '\n') {
+        char *tmp = realloc(packet, packet_len + 1);
+        if (tmp) {
+            packet = tmp;
+            packet[packet_len] = '\n';
+            packet_len++;
+        }
+    }
+
 
             mkdir("/var", 0755);
             mkdir("/var/tmp", 0755);
