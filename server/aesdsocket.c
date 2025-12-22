@@ -25,26 +25,19 @@ static void signal_handler(int signo)
     exit_requested = 1;
 }
 
-static int setup_signals(void)
+static void setup_signals(void)
 {
     struct sigaction sa = {0};
     sa.sa_handler = signal_handler;
-    if (sigaction(SIGINT, &sa, NULL) == -1) return -1;
-    if (sigaction(SIGTERM, &sa, NULL) == -1) return -1;
-    return 0;
+    sigaction(SIGINT, &sa, NULL);
+    sigaction(SIGTERM, &sa, NULL);
 }
 
-static int daemonize(void)
+static void daemonize(void)
 {
-    pid_t pid = fork();
-    if (pid < 0) return -1;
-    if (pid > 0) exit(EXIT_SUCCESS);
-
-    if (setsid() == -1) return -1;
-
-    pid = fork();
-    if (pid < 0) return -1;
-    if (pid > 0) exit(EXIT_SUCCESS);
+    if (fork() > 0) exit(EXIT_SUCCESS);
+    setsid();
+    if (fork() > 0) exit(EXIT_SUCCESS);
 
     chdir("/");
     umask(0);
@@ -56,28 +49,16 @@ static int daemonize(void)
     open("/dev/null", O_RDONLY);
     open("/dev/null", O_WRONLY);
     open("/dev/null", O_WRONLY);
-
-    return 0;
 }
 
 int main(int argc, char *argv[])
 {
-    int sockfd;
-    bool daemon = false;
+    bool daemon = (argc == 2 && strcmp(argv[1], "-d") == 0);
 
     openlog("aesdsocket", LOG_PID, LOG_USER);
+    setup_signals();
 
-    if (argc == 2 && strcmp(argv[1], "-d") == 0) {
-        daemon = true;
-    } else if (argc > 1) {
-        return EXIT_FAILURE;
-    }
-
-    if (setup_signals() == -1) return EXIT_FAILURE;
-
-    sockfd = socket(AF_INET, SOCK_STREAM, 0);
-    if (sockfd == -1) return EXIT_FAILURE;
-
+    int sockfd = socket(AF_INET, SOCK_STREAM, 0);
     int opt = 1;
     setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
@@ -86,44 +67,59 @@ int main(int argc, char *argv[])
     addr.sin_port = htons(PORT);
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
 
-    if (bind(sockfd, (struct sockaddr *)&addr, sizeof(addr)) == -1)
-        return EXIT_FAILURE;
+    bind(sockfd, (struct sockaddr *)&addr, sizeof(addr));
+    listen(sockfd, BACKLOG);
 
-    if (listen(sockfd, BACKLOG) == -1)
-        return EXIT_FAILURE;
-
-    if (daemon && daemonize() == -1)
-        return EXIT_FAILURE;
+    if (daemon)
+        daemonize();
 
     while (!exit_requested) {
         int clientfd = accept(sockfd, NULL, NULL);
-        if (clientfd == -1) continue;
+        if (clientfd < 0)
+            continue;
+
+        struct timeval tv = {1, 0};
+        setsockopt(clientfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
         char buffer[1024];
-        ssize_t bytes = recv(clientfd, buffer, sizeof(buffer), 0);
+        char *packet = NULL;
+        size_t packet_len = 0;
 
-        if (bytes > 0) {
-            int fd = open(DATA_FILE, O_WRONLY | O_CREAT | O_APPEND, 0644);
-            if (fd >= 0) {
-                write(fd, buffer, bytes);
-                close(fd);
-            }
+        while (1) {
+            ssize_t r = recv(clientfd, buffer, sizeof(buffer), 0);
+            if (r <= 0)
+                break;
 
-            fd = open(DATA_FILE, O_RDONLY);
-            if (fd >= 0) {
-                while ((bytes = read(fd, buffer, sizeof(buffer))) > 0) {
-                    send(clientfd, buffer, bytes, 0);
-                }
-                close(fd);
-            }
+            char *tmp = realloc(packet, packet_len + r);
+            if (!tmp)
+                break;
+
+            packet = tmp;
+            memcpy(packet + packet_len, buffer, r);
+            packet_len += r;
+
+            if (memchr(buffer, '\n', r))
+                break;
         }
 
+        if (packet_len > 0) {
+            int fd = open(DATA_FILE, O_WRONLY | O_CREAT | O_APPEND, 0644);
+            write(fd, packet, packet_len);
+            close(fd);
+
+            fd = open(DATA_FILE, O_RDONLY);
+            while ((packet_len = read(fd, buffer, sizeof(buffer))) > 0)
+                send(clientfd, buffer, packet_len, 0);
+            close(fd);
+        }
+
+        free(packet);
         close(clientfd);
     }
 
     close(sockfd);
     remove(DATA_FILE);
     closelog();
-    return EXIT_SUCCESS;
+    return 0;
 }
 
