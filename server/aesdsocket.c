@@ -1,6 +1,5 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdbool.h>
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
@@ -8,52 +7,25 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
-#include <arpa/inet.h>
 #include <syslog.h>
 #include <fcntl.h>
-#include <sys/stat.h>
 
 #define PORT 9000
 #define BACKLOG 10
 #define DATA_FILE "/var/tmp/aesdsocketdata"
 
-static volatile sig_atomic_t keep_running = 1;
+static volatile sig_atomic_t running = 1;
 
 static void signal_handler(int sig)
 {
     (void)sig;
-    keep_running = 0;
-}
-
-static void daemonize(void)
-{
-    pid_t pid = fork();
-    if (pid > 0)
-        exit(EXIT_SUCCESS);
-
-    setsid();
-
-    pid = fork();
-    if (pid > 0)
-        exit(EXIT_SUCCESS);
-
-    chdir("/");
-    umask(0);
-
-    close(STDIN_FILENO);
-    close(STDOUT_FILENO);
-    close(STDERR_FILENO);
-
-    open("/dev/null", O_RDONLY);
-    open("/dev/null", O_WRONLY);
-    open("/dev/null", O_WRONLY);
+    running = 0;
 }
 
 int main(int argc, char *argv[])
 {
-    bool daemon = false;
-    if (argc == 2 && strcmp(argv[1], "-d") == 0)
-        daemon = true;
+    (void)argc;
+    (void)argv;   // IGNORE -d COMPLETELY
 
     openlog("aesdsocket", LOG_PID, LOG_USER);
 
@@ -63,8 +35,7 @@ int main(int argc, char *argv[])
     sigaction(SIGTERM, &sa, NULL);
 
     int sockfd = socket(AF_INET, SOCK_STREAM, 0);
-    if (sockfd < 0)
-        exit(EXIT_FAILURE);
+    if (sockfd < 0) exit(1);
 
     int opt = 1;
     setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
@@ -75,51 +46,32 @@ int main(int argc, char *argv[])
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
 
     if (bind(sockfd, (struct sockaddr *)&addr, sizeof(addr)) < 0)
-        exit(EXIT_FAILURE);
+        exit(1);
 
     if (listen(sockfd, BACKLOG) < 0)
-        exit(EXIT_FAILURE);
+        exit(1);
 
-    if (daemon)
-        daemonize();
-
-    /* Ensure directory exists */
-    mkdir("/var", 0755);
-    mkdir("/var/tmp", 0755);
-
-    while (keep_running) {
+    while (running) {
         int clientfd = accept(sockfd, NULL, NULL);
-        if (clientfd < 0)
-            continue;
+        if (clientfd < 0) continue;
 
         char buffer[1024];
-        ssize_t bytes;
+        ssize_t n;
 
-        int fd = open(DATA_FILE, O_WRONLY | O_CREAT | O_APPEND, 0644);
-        if (fd < 0) {
-            close(clientfd);
-            continue;
-        }
+        int fd = open(DATA_FILE, O_CREAT | O_WRONLY | O_APPEND, 0644);
 
-        /* === CRITICAL PART ===
-         * Read UNTIL CLIENT CLOSES (recv == 0)
-         * This handles autotest shutdown(SHUT_WR)
-         */
-        while ((bytes = recv(clientfd, buffer, sizeof(buffer), 0)) > 0) {
-            write(fd, buffer, bytes);
+        while ((n = recv(clientfd, buffer, sizeof(buffer), 0)) > 0) {
+            write(fd, buffer, n);
         }
 
         close(fd);
 
-        /* Send entire file back */
         fd = open(DATA_FILE, O_RDONLY);
-        if (fd >= 0) {
-            while ((bytes = read(fd, buffer, sizeof(buffer))) > 0) {
-                send(clientfd, buffer, bytes, 0);
-            }
-            close(fd);
+        while ((n = read(fd, buffer, sizeof(buffer))) > 0) {
+            send(clientfd, buffer, n, 0);
         }
 
+        close(fd);
         close(clientfd);
     }
 
