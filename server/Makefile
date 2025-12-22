@@ -1,14 +1,33 @@
-TARGET = aesdsocket
-SRC = aesdsocket.c
+# Define compiler and flags
+CC = gcc
 
-CC ?= $(CROSS_COMPILE)gcc
-CFLAGS ?= -Wall -Wextra -O2
+# Default target
+TARGET = aesdsocket 
 
-.PHONY: all clean
+# Object files
+OBJS = aesdsocket.o
 
-all:
-	$(CC) $(CFLAGS) -o $(TARGET) $(SRC)
+# Compiler flags
+CFLAGS = -Wall -Werror
 
+# Cross-compilation support
+ifeq ($(CROSS_COMPILE),)
+        # Native build
+		PREFIX =
+else
+        # Cross-compilation
+		PREFIX = $(CROSS_COMPILE)
+		CC = $(PREFIX)gcc
+endif
+
+# Default target
+all: $(TARGET)
+
+$(TARGET): $(OBJS)
+		$(CC) $(CFLAGS) $(INCLUDES) -o $@ $^
+%.o: %.c
+		$(CC) -c $< -o $@
+
+# Clean target
 clean:
-	rm -f $(TARGET)
-
+		rm -f $(TARGET) $(OBJS)
