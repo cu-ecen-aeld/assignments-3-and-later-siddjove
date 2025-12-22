@@ -59,6 +59,7 @@ int main(int argc, char *argv[])
     setup_signals();
 
     int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+
     int opt = 1;
     setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
@@ -78,6 +79,7 @@ int main(int argc, char *argv[])
         if (clientfd < 0)
             continue;
 
+        /* Prevent blocking forever */
         struct timeval tv = {1, 0};
         setsockopt(clientfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
@@ -103,14 +105,21 @@ int main(int argc, char *argv[])
         }
 
         if (packet_len > 0) {
+            /* 🔴 THIS WAS THE MISSING PIECE */
+            mkdir("/var/tmp", 0755);
+
             int fd = open(DATA_FILE, O_WRONLY | O_CREAT | O_APPEND, 0644);
-            write(fd, packet, packet_len);
-            close(fd);
+            if (fd >= 0) {
+                write(fd, packet, packet_len);
+                close(fd);
+            }
 
             fd = open(DATA_FILE, O_RDONLY);
-            while ((packet_len = read(fd, buffer, sizeof(buffer))) > 0)
-                send(clientfd, buffer, packet_len, 0);
-            close(fd);
+            if (fd >= 0) {
+                while ((packet_len = read(fd, buffer, sizeof(buffer))) > 0)
+                    send(clientfd, buffer, packet_len, 0);
+                close(fd);
+            }
         }
 
         free(packet);
