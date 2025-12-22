@@ -1,33 +1,18 @@
-# Define compiler and flags
-CC = gcc
+CC ?= $(CROSS_COMPILE)gcc
 
-# Default target
-TARGET = aesdsocket 
-
-# Object files
+TARGET = aesdsocket
 OBJS = aesdsocket.o
 
-# Compiler flags
-CFLAGS = -Wall -Werror
+CFLAGS = -Wall -Werror -pthread
 
-# Cross-compilation support
-ifeq ($(CROSS_COMPILE),)
-        # Native build
-		PREFIX =
-else
-        # Cross-compilation
-		PREFIX = $(CROSS_COMPILE)
-		CC = $(PREFIX)gcc
-endif
-
-# Default target
 all: $(TARGET)
 
 $(TARGET): $(OBJS)
-		$(CC) $(CFLAGS) $(INCLUDES) -o $@ $^
-%.o: %.c
-		$(CC) -c $< -o $@
+	$(CC) $(CFLAGS) -o $@ $^
 
-# Clean target
+%.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
 clean:
-		rm -f $(TARGET) $(OBJS)
+	rm -f $(TARGET) $(OBJS)
+
