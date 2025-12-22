@@ -11,6 +11,7 @@
 #include <arpa/inet.h>
 #include <syslog.h>
 #include <fcntl.h>
+#include <sys/stat.h>
 
 #define PORT 9000
 #define BACKLOG 10
@@ -18,35 +19,71 @@
 
 static volatile sig_atomic_t exit_requested = 0;
 
-/* Signal handler */
 static void signal_handler(int signo)
 {
     (void)signo;
     exit_requested = 1;
 }
 
-/* Setup signal handling */
-static void setup_signals(void)
+static int setup_signals(void)
 {
     struct sigaction sa = {0};
     sa.sa_handler = signal_handler;
-    sigaction(SIGINT, &sa, NULL);
-    sigaction(SIGTERM, &sa, NULL);
 
-    /* Prevent SIGPIPE when client closes early */
-    signal(SIGPIPE, SIG_IGN);
+    if (sigaction(SIGINT, &sa, NULL) == -1) return -1;
+    if (sigaction(SIGTERM, &sa, NULL) == -1) return -1;
+
+    return 0;
+}
+
+static int daemonize(void)
+{
+    pid_t pid = fork();
+    if (pid < 0) return -1;
+    if (pid > 0) exit(EXIT_SUCCESS);
+
+    if (setsid() == -1) return -1;
+
+    pid = fork();
+    if (pid < 0) return -1;
+    if (pid > 0) exit(EXIT_SUCCESS);
+
+    chdir("/");
+    umask(0);
+
+    close(STDIN_FILENO);
+    close(STDOUT_FILENO);
+    close(STDERR_FILENO);
+
+    open("/dev/null", O_RDONLY);
+    open("/dev/null", O_WRONLY);
+    open("/dev/null", O_WRONLY);
+
+    return 0;
 }
 
 int main(int argc, char *argv[])
 {
-    bool daemon_mode = (argc == 2 && strcmp(argv[1], "-d") == 0);
+    int sockfd;
+    bool daemon = false;
 
     openlog("aesdsocket", LOG_PID, LOG_USER);
-    setup_signals();
 
-    int sockfd = socket(AF_INET, SOCK_STREAM, 0);
-    if (sockfd < 0) {
-        syslog(LOG_ERR, "socket failed");
+    if (argc == 2 && strcmp(argv[1], "-d") == 0) {
+        daemon = true;
+    } else if (argc > 1) {
+        syslog(LOG_ERR, "Invalid arguments");
+        return EXIT_FAILURE;
+    }
+
+    if (setup_signals() == -1) {
+        syslog(LOG_ERR, "Signal setup failed");
+        return EXIT_FAILURE;
+    }
+
+    sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd == -1) {
+        syslog(LOG_ERR, "Socket failed");
         return EXIT_FAILURE;
     }
 
@@ -58,76 +95,84 @@ int main(int argc, char *argv[])
     addr.sin_port = htons(PORT);
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
 
-    if (bind(sockfd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        syslog(LOG_ERR, "bind failed");
-        close(sockfd);
+    if (bind(sockfd, (struct sockaddr *)&addr, sizeof(addr)) == -1) {
+        syslog(LOG_ERR, "Bind failed");
         return EXIT_FAILURE;
     }
 
-    if (listen(sockfd, BACKLOG) < 0) {
-        syslog(LOG_ERR, "listen failed");
-        close(sockfd);
+    if (listen(sockfd, BACKLOG) == -1) {
+        syslog(LOG_ERR, "Listen failed");
         return EXIT_FAILURE;
     }
 
-    /* Daemonize after bind/listen */
-    if (daemon_mode) {
-        pid_t pid = fork();
-        if (pid > 0)
-            exit(EXIT_SUCCESS);
+    if (daemon && daemonize() == -1) {
+        syslog(LOG_ERR, "Daemonize failed");
+        return EXIT_FAILURE;
     }
-
-    /* Clear data file once per startup */
-    unlink(DATA_FILE);
 
     while (!exit_requested) {
-        int clientfd = accept(sockfd, NULL, NULL);
-        if (clientfd < 0) {
-            if (errno == EINTR)
-                continue;
-            break;
+        struct sockaddr_in client;
+        socklen_t len = sizeof(client);
+
+        int clientfd = accept(sockfd, (struct sockaddr *)&client, &len);
+        if (clientfd == -1) {
+            if (errno == EINTR) break;
+            continue;
         }
 
-        char buf[1024];
-        bool received_any = false;
+        syslog(LOG_INFO, "Accepted connection");
 
-        /* Receive until newline OR EOF */
-        while (1) {
-            ssize_t r = recv(clientfd, buf, sizeof(buf), 0);
-            if (r <= 0)
+        char buffer[1024];
+        char *packet = NULL;
+        size_t packet_len = 0;
+        bool done = false;
+
+        while (!done) {
+            ssize_t bytes = recv(clientfd, buffer, sizeof(buffer), 0);
+            if (bytes <= 0) {
+                break;  // EOF or error ends packet
+            }
+
+            char *tmp = realloc(packet, packet_len + bytes);
+            if (!tmp) {
+                free(packet);
+                packet = NULL;
                 break;
+            }
+            packet = tmp;
 
-            received_any = true;
+            memcpy(packet + packet_len, buffer, bytes);
+            packet_len += bytes;
 
+            if (memchr(buffer, '\n', bytes)) {
+                done = true;
+            }
+        }
+
+        if (packet && packet_len > 0) {
             int fd = open(DATA_FILE, O_WRONLY | O_CREAT | O_APPEND, 0644);
-            if (fd >= 0) {
-                write(fd, buf, r);
-                fsync(fd);
+            if (fd != -1) {
+                write(fd, packet, packet_len);
                 close(fd);
             }
 
-            if (memchr(buf, '\n', r))
-                break;
-        }
-
-        /* Send entire file back */
-        if (received_any) {
-            int fd = open(DATA_FILE, O_RDONLY);
-            if (fd >= 0) {
-                ssize_t bytes_read;
-                while ((bytes_read = read(fd, buf, sizeof(buf))) > 0) {
-                    send(clientfd, buf, bytes_read, 0);
+            fd = open(DATA_FILE, O_RDONLY);
+            if (fd != -1) {
+                ssize_t r;
+                while ((r = read(fd, buffer, sizeof(buffer))) > 0) {
+                    send(clientfd, buffer, r, 0);
                 }
                 close(fd);
             }
         }
 
-        shutdown(clientfd, SHUT_WR);
+        free(packet);
         close(clientfd);
+        syslog(LOG_INFO, "Closed connection");
     }
 
     close(sockfd);
-    unlink(DATA_FILE);
+    remove(DATA_FILE);
     closelog();
     return EXIT_SUCCESS;
 }
