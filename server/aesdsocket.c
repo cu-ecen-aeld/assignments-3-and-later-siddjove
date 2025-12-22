@@ -51,6 +51,13 @@ static void daemonize(void)
     open("/dev/null", O_WRONLY);
 }
 
+/* 🔴 REQUIRED for Buildroot */
+static void ensure_var_tmp_exists(void)
+{
+    mkdir("/var", 0755);
+    mkdir("/var/tmp", 0755);
+}
+
 int main(int argc, char *argv[])
 {
     bool daemon = (argc == 2 && strcmp(argv[1], "-d") == 0);
@@ -79,10 +86,6 @@ int main(int argc, char *argv[])
         if (clientfd < 0)
             continue;
 
-        /* Prevent blocking forever */
-        struct timeval tv = {1, 0};
-        setsockopt(clientfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-
         char buffer[1024];
         char *packet = NULL;
         size_t packet_len = 0;
@@ -105,8 +108,7 @@ int main(int argc, char *argv[])
         }
 
         if (packet_len > 0) {
-            /* 🔴 THIS WAS THE MISSING PIECE */
-            mkdir("/var/tmp", 0755);
+            ensure_var_tmp_exists();
 
             int fd = open(DATA_FILE, O_WRONLY | O_CREAT | O_APPEND, 0644);
             if (fd >= 0) {
