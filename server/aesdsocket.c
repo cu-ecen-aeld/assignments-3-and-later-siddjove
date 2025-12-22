@@ -51,6 +51,16 @@ static void daemonize(void)
     open("/dev/null", O_WRONLY);
 }
 
+static void strip_cr(char *buf, size_t *len)
+{
+    size_t w = 0;
+    for (size_t r = 0; r < *len; r++) {
+        if (buf[r] != '\r')
+            buf[w++] = buf[r];
+    }
+    *len = w;
+}
+
 /* 🔴 REQUIRED for Buildroot */
 static void ensure_var_tmp_exists(void)
 {
@@ -109,12 +119,14 @@ int main(int argc, char *argv[])
 
         if (packet_len > 0) {
             ensure_var_tmp_exists();
+strip_cr(packet, &packet_len);
 
-            int fd = open(DATA_FILE, O_WRONLY | O_CREAT | O_APPEND, 0644);
-            if (fd >= 0) {
-                write(fd, packet, packet_len);
-                close(fd);
-            }
+int fd = open(DATA_FILE, O_WRONLY | O_CREAT | O_APPEND, 0644);
+if (fd >= 0) {
+    write(fd, packet, packet_len);
+    close(fd);
+}
+
 
             fd = open(DATA_FILE, O_RDONLY);
             if (fd >= 0) {
