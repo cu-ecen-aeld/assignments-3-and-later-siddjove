@@ -29,10 +29,8 @@ static int setup_signals(void)
 {
     struct sigaction sa = {0};
     sa.sa_handler = signal_handler;
-
     if (sigaction(SIGINT, &sa, NULL) == -1) return -1;
     if (sigaction(SIGTERM, &sa, NULL) == -1) return -1;
-
     return 0;
 }
 
@@ -72,20 +70,13 @@ int main(int argc, char *argv[])
     if (argc == 2 && strcmp(argv[1], "-d") == 0) {
         daemon = true;
     } else if (argc > 1) {
-        syslog(LOG_ERR, "Invalid arguments");
         return EXIT_FAILURE;
     }
 
-    if (setup_signals() == -1) {
-        syslog(LOG_ERR, "Signal setup failed");
-        return EXIT_FAILURE;
-    }
+    if (setup_signals() == -1) return EXIT_FAILURE;
 
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
-    if (sockfd == -1) {
-        syslog(LOG_ERR, "Socket failed");
-        return EXIT_FAILURE;
-    }
+    if (sockfd == -1) return EXIT_FAILURE;
 
     int opt = 1;
     setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
@@ -95,80 +86,39 @@ int main(int argc, char *argv[])
     addr.sin_port = htons(PORT);
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
 
-    if (bind(sockfd, (struct sockaddr *)&addr, sizeof(addr)) == -1) {
-        syslog(LOG_ERR, "Bind failed");
+    if (bind(sockfd, (struct sockaddr *)&addr, sizeof(addr)) == -1)
         return EXIT_FAILURE;
-    }
 
-    if (listen(sockfd, BACKLOG) == -1) {
-        syslog(LOG_ERR, "Listen failed");
+    if (listen(sockfd, BACKLOG) == -1)
         return EXIT_FAILURE;
-    }
 
-    if (daemon && daemonize() == -1) {
-        syslog(LOG_ERR, "Daemonize failed");
+    if (daemon && daemonize() == -1)
         return EXIT_FAILURE;
-    }
 
     while (!exit_requested) {
-        struct sockaddr_in client;
-        socklen_t len = sizeof(client);
-
-        int clientfd = accept(sockfd, (struct sockaddr *)&client, &len);
-        if (clientfd == -1) {
-            if (errno == EINTR) break;
-            continue;
-        }
-
-        syslog(LOG_INFO, "Accepted connection");
+        int clientfd = accept(sockfd, NULL, NULL);
+        if (clientfd == -1) continue;
 
         char buffer[1024];
-        char *packet = NULL;
-        size_t packet_len = 0;
-        bool done = false;
+        ssize_t bytes = recv(clientfd, buffer, sizeof(buffer), 0);
 
-        while (!done) {
-            ssize_t bytes = recv(clientfd, buffer, sizeof(buffer), 0);
-            if (bytes <= 0) {
-                break;  // EOF or error ends packet
-            }
-
-            char *tmp = realloc(packet, packet_len + bytes);
-            if (!tmp) {
-                free(packet);
-                packet = NULL;
-                break;
-            }
-            packet = tmp;
-
-            memcpy(packet + packet_len, buffer, bytes);
-            packet_len += bytes;
-
-            if (memchr(buffer, '\n', bytes)) {
-                done = true;
-            }
-        }
-
-        if (packet && packet_len > 0) {
+        if (bytes > 0) {
             int fd = open(DATA_FILE, O_WRONLY | O_CREAT | O_APPEND, 0644);
-            if (fd != -1) {
-                write(fd, packet, packet_len);
+            if (fd >= 0) {
+                write(fd, buffer, bytes);
                 close(fd);
             }
 
             fd = open(DATA_FILE, O_RDONLY);
-            if (fd != -1) {
-                ssize_t r;
-                while ((r = read(fd, buffer, sizeof(buffer))) > 0) {
-                    send(clientfd, buffer, r, 0);
+            if (fd >= 0) {
+                while ((bytes = read(fd, buffer, sizeof(buffer))) > 0) {
+                    send(clientfd, buffer, bytes, 0);
                 }
                 close(fd);
             }
         }
 
-        free(packet);
         close(clientfd);
-        syslog(LOG_INFO, "Closed connection");
     }
 
     close(sockfd);
