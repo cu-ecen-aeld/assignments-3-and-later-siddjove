@@ -1,8 +1,8 @@
+#include "unity.h"
+#include <stdbool.h>
+#include <stdlib.h>
 #include "../../examples/autotest-validate/autotest-validate.h"
 #include "../../assignment-autotest/test/assignment1/username-from-conf-file.h"
-#include "unity.h"
-
- HEAD
 
 /**
 * This function should:
@@ -12,11 +12,11 @@
 *   3) Use unity assertion TEST_ASSERT_EQUAL_STRING_MESSAGE the two strings are equal.  See
 *       the [unity assertion reference](https://github.com/ThrowTheSwitch/Unity/blob/master/docs/UnityAssertionsReference.md)
 */
- assignments-base/assignment2
 void test_validate_my_username()
 {
-    const char *expected = my_username();
-    const char *actual = malloc_username_from_conf_file();
-    TEST_ASSERT_EQUAL_STRING_MESSAGE(expected, actual, "Username mismatch between config and source");
+    /**
+     * TODO: Replace the line below with your code here as described above to verify your /conf/username.txt 
+     * config file and my_username() functions are setup properly
+     */
+    TEST_ASSERT_TRUE_MESSAGE(my_username(),"AESD students, please fix me! testt");
 }
-

@@ -1,16 +1,30 @@
+# Define compiler and flags
 CC = gcc
-CFLAGS = -Wall -Werror
 
-.PHONY: all clean
+# Default target
+TARGET = writer
 
-all: writer
+# Object files
+OBJS = writer.o
 
-writer: writer.o
-	$(CC) $(CFLAGS) -o writer writer.o
+# Cross-compilation support
+ifeq ($(CROSS_COMPILE),)
+        # Native build
+		PREFIX =
+else
+        # Cross-compilation
+		PREFIX = $(CROSS_COMPILE)
+		CC = $(PREFIX)gcc
+endif
 
-writer.o: writer.c
-	$(CC) $(CFLAGS) -c writer.c
+# Default target
+all: $(TARGET)
 
+$(TARGET): $(OBJS)
+		$(CC) -o $@ $^
+%.o: %.c
+		 $(CC) -c $< -o $@
+
+# Clean target
 clean:
-	rm -f writer writer.o
-
+		rm -f $(TARGET) $(OBJS)

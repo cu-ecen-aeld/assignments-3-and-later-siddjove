@@ -1,38 +1,55 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <syslog.h>
+#include <errno.h>
 
 int main(int argc, char *argv[]) {
-    if (argc < 3) {
-        printf("Error: Missing arguments. Usage: %s <file path> <text string>\n", argv[0]);
-        syslog(LOG_ERR, "Missing arguments. Usage: %s <file path> <text string>", argv[0]);
-        return 1;
-    }
+    
+    // open User logging 
+    openlog("writer", LOG_CONS , LOG_USER);
 
-    const char *writefile = argv[1];
-    const char *writestr = argv[2];
-
-    openlog("writer", LOG_PID, LOG_USER);
-
-    FILE *fp = fopen(writefile, "w");
-    if (fp == NULL) {
-        printf("Error: Could not create or write to file %s\n", writefile);
-        syslog(LOG_ERR, "Could not create or write to file %s", writefile);
+    //Check input Argc 
+    if(argc < 3 )
+    {
+        syslog(LOG_ERR , "invalid numeber of args! Usage: writer <filename> <string> ");
         closelog();
         return 1;
     }
 
-    if (fputs(writestr, fp) == EOF) {
-        printf("Error: Failed to write to file %s\n", writefile);
-        syslog(LOG_ERR, "Failed to write to file %s", writefile);
-        fclose(fp);
+    const char *filename = argv[1];
+    const char *writeString = argv[2];
+
+    syslog(LOG_DEBUG , "writing \" %s \"  to \" %s \" ", writeString , filename );
+
+    //open file and check the returned handler 
+    FILE *fHandler = fopen(filename , "w"); 
+    if(fHandler == NULL)
+    {
+        syslog(LOG_ERR , "Cannot open the file. \" %s \" \" %s \"  " , filename, strerror(errno));
         closelog();
         return 1;
     }
 
-    syslog(LOG_DEBUG, "Writing %s to %s", writestr, writefile);
+    //write string to the file 
+    if(fputs(writeString , fHandler) == EOF)
+    {
+        syslog(LOG_ERR , "Cannot write to the file \" %s \"  returned \" %s \"  " , filename, strerror(errno));
+        closelog();
+        return 1;
+    }
+    if(fputs("\n" , fHandler) == EOF)
+    {
+        syslog(LOG_ERR , "Cannot write to the file \" %s \"  returned \" %s \"  " , filename, strerror(errno));
+        closelog();
+        return 1;
+    }
 
-    fclose(fp);
-    closelog();
-    return 0;
+    //close the file 
+    if(fclose(fHandler) != 0 )
+    {
+        syslog(LOG_ERR , "Cannot close the file. \" %s \" \" %s \"  " , filename, strerror(errno));
+        closelog();
+        return 1;
+    }
 }

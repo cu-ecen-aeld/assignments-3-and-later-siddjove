@@ -1,2 +1,0 @@
-filesdir=/tmp/aesd-data
-searchstr=AESD_IS_AWESOME

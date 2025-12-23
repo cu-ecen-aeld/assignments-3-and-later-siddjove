@@ -1,81 +1,73 @@
 #!/bin/sh
-#
-# finder-test.sh
-# A4-compatible test harness.
-# - If run with two args: ./finder-test.sh <directory> <search string>
-# - If run with no args: uses /etc/finder-app/conf/assignment.txt
-# Assumes:
-#   - finder.sh is in PATH (e.g. /usr/bin/finder.sh)
-#   - config file defines filesdir and searchstr
-#   - Output of finder.sh is written to /tmp/assignment4-result.txt
+# Tester script for assignment 1 and assignment 2
+# Author: Siddhant Jajoo
 
-set -eu
+set -e
+set -u
 
-OUTPUT_FILE="/tmp/assignment4-result.txt"
-CONF_DIR="/etc/finder-app/conf"
-ASSIGNMENT_CONF="${CONF_DIR}/assignment.txt"
+NUMFILES=10
+WRITESTR=AELD_IS_FUN
+WRITEDIR=/tmp/aeld-data
+username=$(cat /etc/finder-app/conf/username.txt)
 
-usage() {
-    echo "Usage:"
-    echo "  $0 <directory> <search string>"
-    echo "or:"
-    echo "  $0    (uses ${ASSIGNMENT_CONF})"
-    exit 1
-}
-
-# Ensure finder.sh is available
-if ! command -v finder.sh >/dev/null 2>&1; then
-    echo "Error: finder.sh not found in PATH"
-    exit 1
-fi
-
-FILESDIR=""
-searchstr=""
-
-if [ $# -eq 0 ]; then
-    # No args: load config file
-    if [ ! -f "${ASSIGNMENT_CONF}" ]; then
-        echo "Error: ${ASSIGNMENT_CONF} not found"
-        exit 1
-    fi
-
-    # shellcheck source=/dev/null
-    . "${ASSIGNMENT_CONF}"
-
-    FILESDIR="${filesdir:-${FILES_DIR:-}}"
-    searchstr="${searchstr:-${SEARCH_STR:-}}"
-
-    if [ -z "${FILESDIR}" ] || [ -z "${searchstr}" ]; then
-        echo "Error: ${ASSIGNMENT_CONF} must define filesdir and searchstr"
-        exit 1
-    fi
-
-    # 🔴 IMPORTANT: for A4, create filesdir if it doesn't exist
-    if [ ! -d "${FILESDIR}" ]; then
-        mkdir -p "${FILESDIR}"
-    fi
-elif [ $# -eq 2 ]; then
-    FILESDIR="$1"
-    searchstr="$2"
+if [ $# -lt 3 ]
+then
+	echo "Using default value ${WRITESTR} for string to write"
+	if [ $# -lt 1 ]
+	then
+		echo "Using default value ${NUMFILES} for number of files to write"
+	else
+		NUMFILES=$1
+	fi	
 else
-    usage
+	NUMFILES=$1
+	WRITESTR=$2
+	WRITEDIR=/tmp/aeld-data/$3
 fi
 
-if [ ! -d "${FILESDIR}" ]; then
-    echo "Error: ${FILESDIR} is not a directory."
-    exit 1
+MATCHSTR="The number of files are ${NUMFILES} and the number of matching lines are ${NUMFILES}"
+
+echo "Writing ${NUMFILES} files containing string ${WRITESTR} to ${WRITEDIR}"
+
+rm -rf "${WRITEDIR}"
+
+# create $WRITEDIR if not assignment1
+assignment=`cat /etc/finder-app/conf/assignment.txt`
+
+if [ $assignment != 'assignment1' ]
+then
+	mkdir -p "$WRITEDIR"
+
+	#The WRITEDIR is in quotes because if the directory path consists of spaces, then variable substitution will consider it as multiple argument.
+	#The quotes signify that the entire string in WRITEDIR is a single string.
+	#This issue can also be resolved by using double square brackets i.e [[ ]] instead of using quotes.
+	if [ -d "$WRITEDIR" ]
+	then
+		echo "$WRITEDIR created"
+	else
+		exit 1
+	fi
 fi
+#echo "Removing the old writer utility and compiling as a native application"
+#make clean
+#make
+for i in $( seq 1 $NUMFILES)
+do
+	writer "$WRITEDIR/${username}$i.txt" "$WRITESTR"
+done
 
-echo "Running finder.sh on:"
-echo "  Directory    : ${FILESDIR}"
-echo "  Search string: '${searchstr}'"
-echo "  Output file  : ${OUTPUT_FILE}"
+OUTPUTSTRING=$(finder.sh "$WRITEDIR" "$WRITESTR")
+echo "$OUTPUTSTRING" > /tmp/assignment4-result.txt
 
-# Run finder.sh and capture its output into /tmp/assignment4-result.txt
-if ! finder.sh "${FILESDIR}" "${searchstr}" | tee "${OUTPUT_FILE}"; then
-    echo "finder.sh reported failure"
-    exit 2
+# remove temporary directories
+rm -rf /tmp/aeld-data
+
+set +e
+echo ${OUTPUTSTRING} | grep "${MATCHSTR}"
+if [ $? -eq 0 ]; then
+	echo "success"
+	exit 0
+else
+	echo "failed: expected  ${MATCHSTR} in ${OUTPUTSTRING} but instead found"
+	exit 1
 fi
-
-echo "finder-test.sh completed successfully"
-exit 0
